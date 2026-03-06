@@ -1,0 +1,65 @@
+IndiGo Airlines — Q3 2025 Quality & Maintenance Review Notes
+=============================================================
+
+Engineering Maintenance Report — Landing Gear Issues
+-----------------------------------------------------
+During routine C-checks on the A320neo fleet (VT-ITA, VT-ITB, VT-ITC), the maintenance
+team identified recurring brake disc wear on the main landing gear assembly. The carbon-carbon
+brake discs supplied by Honeywell Aerospace are showing premature erosion patterns at roughly
+60% of the expected service life. This issue appears isolated to the A320neo variant; the
+A321neo brake discs from the same supplier are performing within specification. Safran Landing
+Systems has been consulted regarding the main landing gear strut mating tolerances — preliminary
+analysis suggests a slight misalignment in the shock absorber mounting is contributing to uneven
+brake loading. A service bulletin is being drafted. Nose wheel tires from Michelin Aircraft Tires
+continue to perform well, with no anomalies reported across the fleet.
+
+Propulsion Division — Engine Performance Summary
+-------------------------------------------------
+The PW1100G engines on the A320neo fleet have logged over 18,000 flight hours this quarter
+with a dispatch reliability rate of 99.2%. Pratt & Whitney issued an updated maintenance
+schedule for the fan blade inspection interval, extending it from 3,000 to 3,500 cycles based
+on field data. However, two engines (ESN PW1100G-4821 and PW1100G-4837) flagged high vibration
+readings on the turbine disc section during post-flight analysis. The FADEC controller data
+confirmed the anomaly, and both engines have been sent to the Pratt & Whitney overhaul facility
+in East Hartford. Combustion chamber liner inspections remain on track — no hot-spot erosion
+detected. The PW1133G engines on the A321neo fleet are performing nominally, though one fuel
+nozzle from Woodward Inc. was replaced under warranty due to a flow calibration drift.
+
+ATR Fleet Operations — Turboprop Notes
+---------------------------------------
+The ATR 72-600 fleet operating regional routes (Delhi-Jaipur, Hyderabad-Visakhapatnam) has
+shown excellent engine reliability from the PW127M powerplants. Pratt & Whitney Canada
+confirms the reduction gearbox is within all wear limits. However, two propeller blades from
+Ratier-Figeac were found to have minor leading-edge delamination on the carbon fiber skin during
+a scheduled propeller assembly inspection. The aircraft (VT-IRA) was grounded for blade
+replacement. Ratier-Figeac has provided replacement blades under the existing contract. The
+flight control system avionics are functioning normally across all ATR aircraft.
+
+Avionics & Systems Integration
+-------------------------------
+Collins Aerospace delivered an updated firmware package for the navigation radio units across
+the A320neo fleet. Post-update flight testing shows improved signal acquisition times. The
+weather radar antenna on VT-ITD required replacement after a bird strike incident — the
+composite radome was cracked, and Collins Aerospace shipped a replacement unit within the
+contractual 55-day lead time. L3Harris Technologies completed the annual certification of all
+flight data recorders in the fleet; all units passed. Parker Hannifin hydraulic pumps have been
+reliable this quarter, though Eaton Aerospace actuator valves on two A320neo aircraft (VT-ITE,
+VT-ITF) are showing slightly elevated response times in the hydraulic system — further
+monitoring is underway before considering replacement.
+
+Supplier Performance Summary
+-----------------------------
+Overall supplier ratings for Q3:
+  - Safran Landing Systems: 4.5/5 (consistent quality, responsive to engineering queries)
+  - Pratt & Whitney: 4.8/5 (excellent engine support, proactive service bulletins)
+  - Honeywell Aerospace: 4.3/5 (downgraded from 4.7 due to brake disc wear issue)
+  - Collins Aerospace: 4.4/5 (good avionics support, met lead time commitments)
+  - Pratt & Whitney Canada: 4.6/5 (strong ATR engine support)
+  - Ratier-Figeac: 4.1/5 (propeller delamination concern noted, under review)
+  - Parker Hannifin: 4.1/5 (reliable hydraulic components)
+  - Eaton Aerospace: 3.8/5 (actuator valve response time concern flagged)
+
+Next quarter priorities: Resolve brake disc wear root cause on A320neo landing gear assembly,
+complete PW1100G turbine disc vibration investigation, and finalize Ratier-Figeac propeller
+blade material review. The A321XLR delivery preparation is on track — initial assemblies
+and parts procurement from existing suppliers has begun.

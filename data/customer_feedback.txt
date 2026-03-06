@@ -1,0 +1,102 @@
+IndiGo Airlines — Customer Feedback & Cabin Quality Report (Q3 2025)
+=====================================================================
+
+Compiled by: Passenger Experience Division, IndiGo Airlines (InterGlobe Aviation Ltd.)
+Review Period: July – September 2025
+Classification: Internal Use Only
+
+Cabin Comfort & Seating — A320neo Fleet
+----------------------------------------
+
+Multiple complaints received regarding seat recline mechanism failures on A320neo
+aircraft VT-ITB and VT-ITC during July 2025. Passengers on routes 6E-2041 (DEL-BOM)
+and 6E-5523 (BLR-CCU) reported jammed recline levers in rows 14-18. Root cause
+traced to a batch of faulty Recaro CL3710 slimline seats installed during the April
+2025 cabin refresh cycle. Recaro Aviation issued a service bulletin (SB-CL3710-042)
+recommending actuator arm replacement. 47 seats across 3 aircraft were remediated
+by end of August. Passenger satisfaction for seat comfort improved from 3.1 to 3.8
+(out of 5.0) after the fix.
+
+In-seat USB charging ports manufactured by Astronics showed a 12% failure rate on
+the A321neo fleet, particularly on aircraft VT-ITE and VT-ITF. Astronics shipped
+replacement PEC Series 2 EmPower units in August. All units replaced by September 15.
+Charging port complaint rate dropped from 8.2 per 1000 passengers to 1.1 per 1000.
+
+In-Flight Entertainment & Connectivity
+---------------------------------------
+
+The Panasonic Avionics eX3 IFE system on A321neo aircraft experienced intermittent
+screen blackouts during monsoon-season turbulence. Engineering analysis by Panasonic
+Avionics Corporation indicated loose ribbon cable connectors at the seatback display
+mount. A revised connector bracket (PN: PAC-EX3-BKT-07) was approved for retrofit.
+12 aircraft scheduled for retrofit during the October 2025 C-check cycle.
+
+Wi-Fi connectivity powered by Thales FlytLIVE showed 94.2% uptime across the A320neo
+fleet in Q3, up from 88.7% in Q2. However, passengers on ATR 72-600 regional routes
+reported zero connectivity — Wi-Fi installation on the ATR fleet remains pending
+budget approval. Customer NPS for connectivity on A320neo routes reached +31, while
+ATR routes scored -14 due to the absence of any in-flight connectivity option.
+
+Lavatory & Galley Systems
+--------------------------
+
+Lavatory smoke detector false alarms increased 40% quarter-over-quarter on the A320neo
+fleet. Collins Aerospace, the smoke detector supplier, identified a firmware bug in the
+Model 965-0026-003 detector that caused false triggers under high humidity conditions
+common during monsoon operations. Firmware patch v2.4.1 was deployed fleet-wide by
+August 20, 2025. False alarm rate returned to baseline levels within two weeks.
+
+Galley chiller units from Safran Cabin (formerly Zodiac Aerospace) on VT-ITA and VT-ITD
+showed compressor cycling issues leading to food temperature exceedances. Three catering
+complaints from business passengers on the DEL-BOM trunk route were escalated. Safran
+Cabin dispatched field service engineers who replaced the compressor control boards
+(PN: SCI-GCU-1140) on both aircraft. Mean time between failures (MTBF) for the galley
+chiller improved from 620 hours to projected 1,800 hours post-repair.
+
+Cabin Air Quality & Pressurization Feedback
+---------------------------------------------
+
+Nine passenger complaints regarding dry cabin air were logged on A321neo aircraft
+operating the high-altitude BLR-DEL route during August. The Honeywell 131-9A APU
+bleed air system was inspected and found operating within normal parameters. However,
+humidity levels measured at 4-6% RH at cruise altitude — below the 8% target recommended
+by Honeywell for the HGT1700 Environmental Control System. Engineering proposed adding
+Liebherr humidification modules during the next D-check cycle for VT-ITE and VT-ITF.
+
+Pressurization anomalies were reported on ATR 72-600 VT-IQA during the Kolkata-Agartala
+sector. The Hamilton Sundstrand cabin pressure controller showed erratic behavior during
+descent, causing passenger ear discomfort complaints. The controller was bench-tested,
+recalibrated, and returned to service with updated firmware. No recurrence reported in
+September operations.
+
+Ground Experience & Boarding
+-----------------------------
+
+Boarding process delays at Delhi T1 terminal impacted 23% of IndiGo departures in July,
+averaging 18 minutes delay. Primary causes: biometric boarding gate integration issues
+with the DigiYatra platform and staffing shortages at the manual document verification
+counters. After adding two additional DigiYatra e-gates and cross-training ground crew,
+August on-time boarding improved to 91%.
+
+Passenger wheelchair assistance satisfaction at Mumbai CSMIA terminal scored 4.6/5.0,
+the highest among Indian carriers per the DGCA Q3 accessibility audit. IndiGo's
+partnership with ground handler Celebi Aviation Services for assisted passenger management
+was cited as a best practice.
+
+Customer Complaint Trend Summary
+---------------------------------
+
+Category                     Q2 2025    Q3 2025    Change
+Seat Comfort                 312        198        -36.5%
+Charging/Power               187        42         -77.5%
+IFE System                   94         78         -17.0%
+Wi-Fi/Connectivity           203        156        -23.2%
+Lavatory Issues              67         89         +32.8%
+Cabin Air Quality            31         44         +41.9%
+Boarding/Ground              445        287        -35.5%
+Baggage Handling             521        498        -4.4%
+Total Complaints             1,860      1,392      -25.2%
+
+Overall passenger NPS improved from +18 (Q2) to +27 (Q3). The 25.2% reduction in total
+complaints is attributed to the proactive supplier escalation program led by VP Engineering
+Anand Krishnamurthy and Head of Passenger Experience Priya Sharma.
