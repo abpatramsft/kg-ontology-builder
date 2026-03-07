@@ -23,7 +23,7 @@ Unstructured Sources          Structured Sources
 |---|---|---|---|
 | **Layer 1 — Domain Graph** | SQLite DB | Schema semantics: table descriptions, domains, FK + semantic relationships | ✅ Complete |
 | **Layer 2 — Lexical Graph** | Text files | Document landscape: Document → Chunk → Subject hierarchy + vector embeddings | ✅ Complete |
-| **Layer 3 — Subject Graph** | Cross-layer | Bridge: `CORRESPONDS_TO` edges linking unstructured subjects to structured entities | ⬜ Planned |
+| **Layer 3 — Subject Graph** | Cross-layer | Bridge: `CORRESPONDS_TO` edges linking unstructured subjects to structured entities | ✅ Complete |
 
 ---
 
@@ -53,6 +53,11 @@ KG_ontology_generation/
 │   ├── __init__.py
 │   ├── lexical_graph.py            # Full pipeline: load → chunk → embed → extract → build → query
 │   └── enrich_advanced.py          # ReAct agent with VectorDBQueryTool
+│
+├── subject_graph/                  # Layer 3 — Subject Graph Bridge (cross-layer)
+│   ├── __init__.py
+│   ├── subject_graph.py            # Full pipeline: fetch → embed → resolve → build → query → visualize
+│   └── enrich_advanced.py          # ReAct agent with GraphQueryTool
 │
 ├── kg_ontology_semantic_layer.md   # Design document (3-layer architecture)
 ├── llm_test.py                     # Reference script for Azure OpenAI LLM calls
@@ -200,6 +205,83 @@ MATCH (s:Subject {type: "supplier"}) RETURN s.name, s.mention_count ORDER BY s.m
 
 ---
 
+### Layer 3 — Subject Graph Bridge
+
+**Embedding similarity** (default, per-subject direction):
+```bash
+python -m subject_graph.subject_graph
+```
+
+**ReAct agent resolution** (iterative graph + vector exploration):
+```bash
+python -m subject_graph.subject_graph --advanced
+```
+
+**Per-domain-entity direction** (loop over tables instead of subjects):
+```bash
+python -m subject_graph.subject_graph --direction domain_entity
+python -m subject_graph.subject_graph --advanced --direction domain_entity
+```
+
+**Custom similarity threshold** (basic mode only, default 0.45):
+```bash
+python -m subject_graph.subject_graph --threshold 0.55
+```
+
+**Standalone advanced agent test:**
+```bash
+python -m subject_graph.enrich_advanced
+```
+
+#### What the pipeline does:
+
+1. **Fetch Subjects** — reads `:Subject` nodes from Neo4j (Layer 2), including chunk contexts via `:MENTIONS` edges
+2. **Fetch Domain Entities** — reads `:DomainEntity` nodes from Neo4j (Layer 1), including relationships and column metadata
+3. **Embed** — builds rich text representations of both sides, embeds via Azure OpenAI `text-embedding-3-small` (basic mode only)
+4. **Resolve Correspondences** — matches subjects to domain entities using cosine similarity + LLM confirmation (basic) or ReAct agent exploration (advanced)
+5. **Build Graph** — writes `CORRESPONDS_TO` edges between `:Subject` and `:DomainEntity` nodes in Neo4j
+6. **Query** — 3-layer agent router: searches across Domain Graph, Lexical Graph, and Subject Graph Bridge
+7. **Visualize** — prints all bridge edges, cross-layer paths, and summary statistics
+
+#### Direction flag:
+
+| Direction | Outer loop | Ensures | Use case |
+|---|---|---|---|
+| `--direction subject` (default) | Per subject → find matching tables | Every subject is evaluated | Most subjects should link somewhere |
+| `--direction domain_entity` | Per table → find matching subjects | Every table is evaluated | Ensure no table is orphaned |
+
+#### Neo4j Schema (Layer 3):
+
+```
+(:Subject {name, type, description, mention_count})
+    -[:CORRESPONDS_TO {confidence, method, reason}]->
+(:DomainEntity {name, description, domain, key_columns})
+```
+
+#### Sample Cypher queries:
+
+```cypher
+-- All Subject ↔ DomainEntity bridges
+MATCH (s:Subject)-[r:CORRESPONDS_TO]->(d:DomainEntity)
+RETURN s.name, s.type, r.confidence, r.method, d.name ORDER BY r.confidence DESC
+
+-- Full 3-layer path: Document → Chunk → Subject → DomainEntity
+MATCH path = (doc:Document)-[:CONTAINS]->(c:Chunk)-[:MENTIONS]->(s:Subject)-[:CORRESPONDS_TO]->(de:DomainEntity)
+RETURN path
+
+-- Which subjects link to the "suppliers" table?
+MATCH (s:Subject)-[r:CORRESPONDS_TO]->(d:DomainEntity {name: "suppliers"})
+RETURN s.name, s.type, r.confidence, r.reason
+
+-- Subjects without any bridge (unlinked)
+MATCH (s:Subject) WHERE NOT (s)-[:CORRESPONDS_TO]->() RETURN s.name, s.type
+
+-- Tables without any bridge (orphaned)
+MATCH (d:DomainEntity) WHERE NOT ()-[:CORRESPONDS_TO]->(d) RETURN d.name, d.domain
+```
+
+---
+
 ## Enrichment Modes Compared
 
 Both layers follow the same dual-mode pattern: a fast single-shot mode and a deeper ReAct agent mode.
@@ -285,6 +367,58 @@ Typical agent run per document: **3-6 iterations** of tool use before producing 
 
 ---
 
+### Layer 3 — Subject Graph Bridge Modes
+
+#### Embedding Similarity (`resolve_correspondences_simple`)
+
+Embeds both subjects and domain entities via Azure OpenAI, computes cosine similarity, then applies a 3-bucket strategy:
+
+- **High confidence** (≥ 0.65): match created directly
+- **Ambiguous** (0.45–0.65): LLM confirmation call to validate
+- **Low** (< 0.45): skipped
+
+Fast and deterministic. Does not explore actual graph content — works purely from text representations and embeddings.
+
+#### ReAct Agent (`resolve_correspondences_advanced`)
+
+A custom Reason-Act agent that iteratively explores the full Neo4j knowledge graph (both Layer 1 and Layer 2) and optionally the LanceDB vector store:
+
+```
+THOUGHT → ACTION (graph_query_tool) → OBSERVATION → repeat → FINAL_ANSWER
+```
+
+The agent runs **one instance per entity** (per subject or per table, depending on `--direction`). It has a single tool — `GraphQueryTool` — with 6 actions:
+
+- `list_subjects` — all Subject nodes with type, description, mention count
+- `list_domain_entities` — all DomainEntity nodes with domain, columns, row count
+- `get_subject_context(name)` — Subject + all Chunks that MENTION it + parent Documents
+- `get_domain_entity_detail(name)` — DomainEntity + FK/semantic relationships + column info
+- `search_similar(query, n)` — semantic similarity search across LanceDB chunks
+- `query_graph(cypher)` — arbitrary read-only Cypher query
+
+**How the agent works step by step:**
+
+1. **Understands the target** — reads context for the subject (or table, if `--direction domain_entity`)
+2. **Explores candidates** — examines domain entities (or subjects) to understand what they contain
+3. **Semantic probing** — uses `search_similar` to find document mentions related to candidate tables
+4. **Cross-references** — uses `query_graph` for flexible exploration (paths, counts, existing edges)
+5. **Produces FINAL_ANSWER** — a JSON array of correspondence matches with confidence scores and reasons
+
+After all entities are processed, a **cross-entity validation checkpoint** reviews the full mapping for consistency, completeness, and correctness — direction-aware (flags unlinked subjects or unlinked tables depending on direction).
+
+Typical agent run per entity: **3-5 iterations** of tool use before producing a final answer.
+
+| Aspect | Embedding Similarity | ReAct Agent |
+|---|---|---|
+| LLM calls per entity | 0-1 (only for ambiguous) | 4-7 (iterative exploration) |
+| Explores graph content | No | Yes (chunks, relationships, paths) |
+| Uses vector search | No (uses embeddings directly) | Yes (LanceDB similarity) |
+| Cross-entity validation | No | Yes |
+| Configurable direction | Yes (`--direction`) | Yes (`--direction`) |
+| Threshold tuning | Yes (`--threshold`) | N/A (agent decides confidence) |
+
+---
+
 ## Querying the Graph
 
 After building, explore in the **Neo4j Browser** at http://localhost:7474:
@@ -300,6 +434,10 @@ MATCH (d:Document)-[r1:CONTAINS]->(c:Chunk)-[r2:MENTIONS]->(s:Subject) RETURN d,
 MATCH (n) WHERE n:DomainEntity OR n:Document OR n:Chunk OR n:Subject
 OPTIONAL MATCH (n)-[r]-(m)
 RETURN n, r, m
+
+-- Full 3-layer path: Document → Chunk → Subject → DomainEntity
+MATCH path = (doc:Document)-[:CONTAINS]->(c:Chunk)-[:MENTIONS]->(s:Subject)-[:CORRESPONDS_TO]->(de:DomainEntity)
+RETURN path
 
 -- Find a specific table (Layer 1)
 MATCH (n:DomainEntity {name: "suppliers"}) RETURN n
@@ -324,7 +462,7 @@ RETURN path
 
 | Component | Technology | Role |
 |---|---|---|
-| Graph DB | Neo4j 5 Community (Docker) | Stores the KG ontology (both layers) |
+| Graph DB | Neo4j 5 Community (Docker) | Stores the KG ontology (all 3 layers) |
 | Vector DB | LanceDB (local, on-disk) | Chunk embeddings + similarity search (Layer 2) |
 | Structured DB | SQLite (stdlib) | Source data for Layer 1 |
 | LLM | Azure OpenAI GPT-4.1 | Schema enrichment + entity extraction |
