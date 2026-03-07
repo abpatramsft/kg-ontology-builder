@@ -22,7 +22,7 @@ Unstructured Sources          Structured Sources
 | Layer | Source | What it captures | Status |
 |---|---|---|---|
 | **Layer 1 — Domain Graph** | SQLite DB | Schema semantics: table descriptions, domains, FK + semantic relationships | ✅ Complete |
-| **Layer 2 — Lexical Graph** | Text files | Document landscape: Document → Chunk → Subject hierarchy + vector embeddings | ✅ Complete |
+| **Layer 2 — Lexical Graph** | Text files | Document landscape: Document → Subject mapping + vector embeddings (chunks used internally only) | ✅ Complete |
 | **Layer 3 — Subject Graph** | Cross-layer | Bridge: `CORRESPONDS_TO` edges linking unstructured subjects to structured entities | ✅ Complete |
 
 ---
@@ -170,16 +170,14 @@ python lexical_graph/lexical_graph.py --advanced
 2. **Chunk** — splits documents into sections using header/underline detection (fallback: paragraph splitting)
 3. **Embed & Store** — embeds all chunks via Azure OpenAI `text-embedding-3-small`, stores vectors + metadata in LanceDB
 4. **Extract Subjects** — LLM extracts named entities (aircraft, parts, suppliers, metrics, etc.) from each chunk
-5. **Summarize** — generates 1-2 sentence summaries for each document and chunk
-6. **Build Graph** — creates `:Document`, `:Chunk`, `:Subject` nodes and `:CONTAINS`, `:MENTIONS` edges in Neo4j
+5. **Summarize** — generates 1-2 sentence summaries for each document
+6. **Build Graph** — creates `:Document` and `:Subject` nodes with `:MENTIONS` edges in Neo4j (Chunk nodes are **not** stored in the graph — chunks are used internally for LLM context management and vector search only)
 7. **Query** — dual query interface: keyword graph traversal + vector similarity search via LanceDB
 
 #### Neo4j Schema (Layer 2):
 
 ```
-(:Document {name, source_path, topic_summary, chunk_count})
-    -[:CONTAINS {chunk_index}]->
-(:Chunk {chunk_id, doc_name, summary, text_preview, char_count})
+(:Document {name, source_path, topic_summary})
     -[:MENTIONS {context}]->
 (:Subject {name, type, description, mention_count})
 ```
@@ -188,14 +186,14 @@ python lexical_graph/lexical_graph.py --advanced
 
 ```cypher
 -- Full Lexical Graph
-MATCH (d:Document)-[:CONTAINS]->(c:Chunk)-[:MENTIONS]->(s:Subject) RETURN d, c, s
+MATCH (d:Document)-[:MENTIONS]->(s:Subject) RETURN d, s
 
 -- All subjects from a document
-MATCH (d:Document {name: "quality_reviews.txt"})-[:CONTAINS]->(c)-[:MENTIONS]->(s)
+MATCH (d:Document {name: "quality_reviews.txt"})-[:MENTIONS]->(s:Subject)
 RETURN DISTINCT s.name, s.type, s.mention_count ORDER BY s.mention_count DESC
 
 -- Cross-document entity overlap (subjects mentioned in both files)
-MATCH (d1:Document)-[:CONTAINS]->()-[:MENTIONS]->(s:Subject)<-[:MENTIONS]-()<-[:CONTAINS]-(d2:Document)
+MATCH (d1:Document)-[:MENTIONS]->(s:Subject)<-[:MENTIONS]-(d2:Document)
 WHERE d1.name < d2.name
 RETURN s.name, s.type, d1.name, d2.name
 
@@ -235,12 +233,12 @@ python -m subject_graph.enrich_advanced
 
 #### What the pipeline does:
 
-1. **Fetch Subjects** — reads `:Subject` nodes from Neo4j (Layer 2), including chunk contexts via `:MENTIONS` edges
+1. **Fetch Subjects** — reads `:Subject` nodes from Neo4j (Layer 2), including document contexts via `:MENTIONS` edges
 2. **Fetch Domain Entities** — reads `:DomainEntity` nodes from Neo4j (Layer 1), including relationships and column metadata
 3. **Embed** — builds rich text representations of both sides, embeds via Azure OpenAI `text-embedding-3-small` (basic mode only)
 4. **Resolve Correspondences** — matches subjects to domain entities using cosine similarity + LLM confirmation (basic) or ReAct agent exploration (advanced)
 5. **Build Graph** — writes `CORRESPONDS_TO` edges between `:Subject` and `:DomainEntity` nodes in Neo4j
-6. **Query** — 3-layer agent router: searches across Domain Graph, Lexical Graph, and Subject Graph Bridge
+6. **Query** — cross-layer agent router: searches across Domain Graph, Lexical Graph, and Subject Graph Bridge
 7. **Visualize** — prints all bridge edges, cross-layer paths, and summary statistics
 
 #### Direction flag:
@@ -265,8 +263,8 @@ python -m subject_graph.enrich_advanced
 MATCH (s:Subject)-[r:CORRESPONDS_TO]->(d:DomainEntity)
 RETURN s.name, s.type, r.confidence, r.method, d.name ORDER BY r.confidence DESC
 
--- Full 3-layer path: Document → Chunk → Subject → DomainEntity
-MATCH path = (doc:Document)-[:CONTAINS]->(c:Chunk)-[:MENTIONS]->(s:Subject)-[:CORRESPONDS_TO]->(de:DomainEntity)
+-- Full cross-layer path: Document → Subject → DomainEntity
+MATCH path = (doc:Document)-[:MENTIONS]->(s:Subject)-[:CORRESPONDS_TO]->(de:DomainEntity)
 RETURN path
 
 -- Which subjects link to the "suppliers" table?
@@ -391,9 +389,9 @@ The agent runs **one instance per entity** (per subject or per table, depending 
 
 - `list_subjects` — all Subject nodes with type, description, mention count
 - `list_domain_entities` — all DomainEntity nodes with domain, columns, row count
-- `get_subject_context(name)` — Subject + all Chunks that MENTION it + parent Documents
+- `get_subject_context(name)` — Subject + all Documents that MENTION it + context
 - `get_domain_entity_detail(name)` — DomainEntity + FK/semantic relationships + column info
-- `search_similar(query, n)` — semantic similarity search across LanceDB chunks
+- `search_similar(query, n)` — semantic similarity search across LanceDB
 - `query_graph(cypher)` — arbitrary read-only Cypher query
 
 **How the agent works step by step:**
@@ -411,7 +409,7 @@ Typical agent run per entity: **3-5 iterations** of tool use before producing a 
 | Aspect | Embedding Similarity | ReAct Agent |
 |---|---|---|
 | LLM calls per entity | 0-1 (only for ambiguous) | 4-7 (iterative exploration) |
-| Explores graph content | No | Yes (chunks, relationships, paths) |
+| Explores graph content | No | Yes (documents, relationships, paths) |
 | Uses vector search | No (uses embeddings directly) | Yes (LanceDB similarity) |
 | Cross-entity validation | No | Yes |
 | Configurable direction | Yes (`--direction`) | Yes (`--direction`) |
@@ -428,15 +426,15 @@ After building, explore in the **Neo4j Browser** at http://localhost:7474:
 MATCH (n:DomainEntity)-[r]->(m) RETURN n, r, m
 
 -- All Lexical Graph nodes and edges (Layer 2)
-MATCH (d:Document)-[r1:CONTAINS]->(c:Chunk)-[r2:MENTIONS]->(s:Subject) RETURN d, r1, c, r2, s
+MATCH (d:Document)-[r:MENTIONS]->(s:Subject) RETURN d, r, s
 
 -- Both layers together
-MATCH (n) WHERE n:DomainEntity OR n:Document OR n:Chunk OR n:Subject
+MATCH (n) WHERE n:DomainEntity OR n:Document OR n:Subject
 OPTIONAL MATCH (n)-[r]-(m)
 RETURN n, r, m
 
--- Full 3-layer path: Document → Chunk → Subject → DomainEntity
-MATCH path = (doc:Document)-[:CONTAINS]->(c:Chunk)-[:MENTIONS]->(s:Subject)-[:CORRESPONDS_TO]->(de:DomainEntity)
+-- Full cross-layer path: Document → Subject → DomainEntity
+MATCH path = (doc:Document)-[:MENTIONS]->(s:Subject)-[:CORRESPONDS_TO]->(de:DomainEntity)
 RETURN path
 
 -- Find a specific table (Layer 1)

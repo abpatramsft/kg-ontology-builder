@@ -42,8 +42,8 @@ from utils.neo4j_helpers import get_neo4j_driver, run_cypher, run_cypher_write
 
 def fetch_subjects(driver=None) -> list[dict]:
     """
-    Read all :Subject nodes from Neo4j, including their chunk context
-    via MENTIONS edges.
+    Read all :Subject nodes from Neo4j, including their document context
+    via MENTIONS edges (Document → Subject).
 
     Returns list of:
         {
@@ -51,7 +51,7 @@ def fetch_subjects(driver=None) -> list[dict]:
             "type": str,
             "description": str,
             "mention_count": int,
-            "chunk_contexts": [{"chunk_id": str, "text_preview": str, "summary": str}]
+            "doc_contexts": [{"doc_name": str, "topic_summary": str, "mention_context": str}]
         }
     """
     if driver is None:
@@ -67,12 +67,12 @@ def fetch_subjects(driver=None) -> list[dict]:
 
     subjects = []
     for rec in records:
-        # For each subject, fetch chunk contexts via MENTIONS edges
-        chunks = run_cypher(driver, """
-            MATCH (c:Chunk)-[r:MENTIONS]->(s:Subject {name: $name})
-            RETURN c.chunk_id AS chunk_id, c.text_preview AS text_preview,
-                   c.summary AS summary, r.context AS context
-            ORDER BY c.chunk_id
+        # For each subject, fetch document contexts via MENTIONS edges
+        docs = run_cypher(driver, """
+            MATCH (d:Document)-[r:MENTIONS]->(s:Subject {name: $name})
+            RETURN d.name AS doc_name, d.topic_summary AS topic_summary,
+                   r.context AS context
+            ORDER BY d.name
         """, {"name": rec["name"]})
 
         subjects.append({
@@ -80,14 +80,13 @@ def fetch_subjects(driver=None) -> list[dict]:
             "type": rec["type"] or "unknown",
             "description": rec["description"] or "",
             "mention_count": rec["mention_count"] or 1,
-            "chunk_contexts": [
+            "doc_contexts": [
                 {
-                    "chunk_id": c["chunk_id"],
-                    "text_preview": c.get("text_preview", ""),
-                    "summary": c.get("summary", ""),
-                    "mention_context": c.get("context", ""),
+                    "doc_name": d["doc_name"],
+                    "topic_summary": d.get("topic_summary", ""),
+                    "mention_context": d.get("context", ""),
                 }
-                for c in chunks
+                for d in docs
             ],
         })
 
@@ -103,7 +102,7 @@ def print_subjects(subjects: list[dict]):
     for subj in subjects:
         print(f"  [{subj['type']:10s}] {subj['name']}")
         print(f"              Mentions: {subj['mention_count']}  |  "
-              f"Chunks: {len(subj['chunk_contexts'])}")
+              f"Documents: {len(subj['doc_contexts'])}")
         if subj.get("description"):
             print(f"              Context: {subj['description'][:100]}")
     print(f"{'=' * 70}")
@@ -204,7 +203,7 @@ def print_domain_entities(entities: list[dict]):
 def build_subject_text(subject: dict) -> str:
     """
     Build a rich text representation of a subject for embedding.
-    Combines the subject name, type, description, and chunk context.
+    Combines the subject name, type, description, and document context.
     """
     parts = [subject["name"]]
     if subject.get("type") and subject["type"] != "unknown":
@@ -212,13 +211,13 @@ def build_subject_text(subject: dict) -> str:
     if subject.get("description"):
         parts.append(f"— {subject['description']}")
 
-    # Add chunk contexts for richer semantics
+    # Add document contexts for richer semantics
     contexts = []
-    for cc in subject.get("chunk_contexts", [])[:3]:  # limit to 3 contexts
-        if cc.get("mention_context"):
-            contexts.append(cc["mention_context"])
-        elif cc.get("summary"):
-            contexts.append(cc["summary"])
+    for dc in subject.get("doc_contexts", [])[:3]:  # limit to 3 contexts
+        if dc.get("mention_context"):
+            contexts.append(dc["mention_context"])
+        elif dc.get("topic_summary"):
+            contexts.append(dc["topic_summary"])
     if contexts:
         parts.append("| Context: " + "; ".join(contexts))
 
@@ -472,13 +471,13 @@ def _llm_confirm_match(
 
     Returns: {"match": bool, "confidence": float, "reason": str}
     """
-    # Build context from subject chunks
+    # Build context from subject documents
     context_snippets = []
-    for cc in subject.get("chunk_contexts", [])[:3]:
-        if cc.get("mention_context"):
-            context_snippets.append(cc["mention_context"])
-        elif cc.get("text_preview"):
-            context_snippets.append(cc["text_preview"][:150])
+    for dc in subject.get("doc_contexts", [])[:3]:
+        if dc.get("mention_context"):
+            context_snippets.append(dc["mention_context"])
+        elif dc.get("topic_summary"):
+            context_snippets.append(dc["topic_summary"][:150])
     context_text = "; ".join(context_snippets) if context_snippets else subject.get("description", "")
 
     prompt = f"""You are an entity resolution system for IndiGo Airlines knowledge graph.
@@ -620,12 +619,12 @@ def build_subject_graph(correspondences: list[dict], driver=None):
 
 def query_subject_graph(question: str, driver=None) -> dict:
     """
-    Full 3-layer query: traverses Subject → CORRESPONDS_TO → DomainEntity
-    and Subject ← MENTIONS ← Chunk ← CONTAINS ← Document.
+    Full cross-layer query: traverses Subject → CORRESPONDS_TO → DomainEntity
+    and Subject ← MENTIONS ← Document.
 
     This is the core "agent router" function — given a question, it returns:
       - structured_sources: DomainEntity tables to query via SQL
-      - unstructured_sources: Documents/Chunks to fetch from vector store
+      - unstructured_sources: Documents to fetch from vector store
       - bridge_subjects: The subjects that bridge both worlds
 
     Returns:
@@ -635,8 +634,7 @@ def query_subject_graph(question: str, driver=None) -> dict:
                  "key_columns": str, "confidence": float, "bridged_by": [subject_names]}
             ],
             "unstructured_sources": [
-                {"document": str, "chunks": [{"chunk_id": str, "summary": str}],
-                 "subjects": [str]}
+                {"document": str, "summary": str, "subjects": [str]}
             ],
             "bridge_subjects": [
                 {"name": str, "type": str, "linked_table": str, "confidence": float}
@@ -717,12 +715,10 @@ def query_subject_graph(question: str, driver=None) -> dict:
                     "confidence": br["confidence"],
                 })
 
-            # ── Follow MENTIONS back to chunks and documents ───────
+            # ── Follow MENTIONS back to documents ─────────────────
             doc_records = run_cypher(driver, """
-                MATCH (c:Chunk)-[:MENTIONS]->(s:Subject {name: $name})
-                MATCH (d:Document)-[:CONTAINS]->(c)
-                RETURN d.name AS doc_name, d.topic_summary AS doc_summary,
-                       c.chunk_id AS chunk_id, c.summary AS chunk_summary
+                MATCH (d:Document)-[:MENTIONS]->(s:Subject {name: $name})
+                RETURN d.name AS doc_name, d.topic_summary AS doc_summary
             """, {"name": subj_name})
 
             for dr in doc_records:
@@ -732,19 +728,12 @@ def query_subject_graph(question: str, driver=None) -> dict:
                     result["unstructured_sources"].append({
                         "document": doc_name,
                         "summary": dr.get("doc_summary", ""),
-                        "chunks": [],
                         "subjects": [],
                     })
 
-                # Add chunk to the document entry
+                # Add subject to document entry
                 for unsrc in result["unstructured_sources"]:
                     if unsrc["document"] == doc_name:
-                        chunk_ids = [c["chunk_id"] for c in unsrc["chunks"]]
-                        if dr["chunk_id"] not in chunk_ids:
-                            unsrc["chunks"].append({
-                                "chunk_id": dr["chunk_id"],
-                                "summary": dr.get("chunk_summary", ""),
-                            })
                         if subj_name not in unsrc["subjects"]:
                             unsrc["subjects"].append(subj_name)
 
@@ -796,9 +785,6 @@ def print_query_results(question: str, results: dict):
             print(f"    Document: {unsrc['document']}")
             if unsrc.get("summary"):
                 print(f"      Summary: {unsrc['summary'][:80]}")
-            print(f"      Relevant chunks: {len(unsrc['chunks'])}")
-            for ch in unsrc["chunks"][:3]:
-                print(f"        - {ch['chunk_id']}: {ch.get('summary', '')[:60]}")
             print(f"      Subjects: {', '.join(unsrc['subjects'])}")
 
     if bs:
@@ -845,30 +831,30 @@ def visualize_subject_graph(driver=None):
         if rec.get("reason"):
             print(f"      {' ' * 42} {rec['reason'][:70]}")
 
-    # ── Full 3-layer traversal ────────────────────────────────────────
-    print(f"\n  Full 3-Layer Paths (Document → Chunk → Subject → DomainEntity):")
+    # ── Full 2-layer traversal (no Chunk nodes in KG) ───────────────
+    print(f"\n  Full Paths (Document → Subject → DomainEntity):")
     records = run_cypher(driver, """
-        MATCH (doc:Document)-[:CONTAINS]->(c:Chunk)-[:MENTIONS]->(s:Subject)
+        MATCH (doc:Document)-[:MENTIONS]->(s:Subject)
               -[r:CORRESPONDS_TO]->(de:DomainEntity)
-        RETURN doc.name AS document, c.chunk_id AS chunk,
+        RETURN doc.name AS document,
                s.name AS subject, de.name AS table_name,
                r.confidence AS confidence
-        ORDER BY doc.name, c.chunk_id
+        ORDER BY doc.name, s.name
     """)
     if not records:
-        print("    (no complete 3-layer paths found)")
+        print("    (no complete Document → Subject → DomainEntity paths found)")
     for rec in records:
-        print(f"    {rec['document']:25s} → {rec['chunk']:35s} → "
+        print(f"    {rec['document']:25s} → "
               f"{rec['subject']:25s} → {rec['table_name']}"
               f"  ({rec['confidence']})")
 
     # ── Summary counts ────────────────────────────────────────────────
     print(f"\n  Summary:")
-    for label in ["DomainEntity", "Document", "Chunk", "Subject"]:
+    for label in ["DomainEntity", "Document", "Subject"]:
         count = run_cypher(driver, f"MATCH (n:{label}) RETURN count(n) AS c")[0]["c"]
         print(f"    {label} nodes: {count}")
 
-    for rel_type in ["HAS_FK", "CONTAINS", "MENTIONS", "CORRESPONDS_TO"]:
+    for rel_type in ["HAS_FK", "MENTIONS", "CORRESPONDS_TO"]:
         count = run_cypher(
             driver,
             f"MATCH ()-[r:{rel_type}]->() RETURN count(r) AS c"
@@ -1004,9 +990,9 @@ def main():
         print_query_results(q, results)
 
     driver.close()
-    print("\nDone! View the full 3-layer graph at http://localhost:7474")
-    print("Try: MATCH (d:Document)-[:CONTAINS]->(c:Chunk)-[:MENTIONS]->(s:Subject)"
-          "-[:CORRESPONDS_TO]->(de:DomainEntity) RETURN d, c, s, de")
+    print("\nDone! View the full graph at http://localhost:7474")
+    print("Try: MATCH (d:Document)-[:MENTIONS]->(s:Subject)"
+          "-[:CORRESPONDS_TO]->(de:DomainEntity) RETURN d, s, de")
 
 
 if __name__ == "__main__":

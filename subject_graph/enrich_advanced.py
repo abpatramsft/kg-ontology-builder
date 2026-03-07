@@ -18,8 +18,8 @@ Architecture:
   └──────────────────────────────────────────────────────────────┘
 
 The agent has one tool — GraphQueryTool — which gives it access to the
-Neo4j knowledge graph (DomainEntity, Document, Chunk, Subject nodes) and
-optionally LanceDB for semantic search across chunks.
+Neo4j knowledge graph (DomainEntity, Document, Subject nodes) and
+optionally LanceDB for semantic search across document chunks.
 
 Usage:
     from subject_graph.enrich_advanced import resolve_correspondences_advanced
@@ -56,13 +56,13 @@ from utils.neo4j_helpers import run_cypher
 class GraphQueryTool:
     """
     Read-only tool that gives an agent access to explore the Neo4j knowledge
-    graph (Layer 1 DomainEntity + Layer 2 Document/Chunk/Subject) and
+    graph (Layer 1 DomainEntity + Layer 2 Document/Subject) and
     optionally the LanceDB table for semantic search.
 
     Supported actions:
       - list_subjects()               → all Subject nodes
       - list_domain_entities()        → all DomainEntity nodes
-      - get_subject_context(name)     → Subject + its MENTIONS chunks + parent documents
+      - get_subject_context(name)     → Subject + its MENTIONS documents + context
       - get_domain_entity_detail(name)→ DomainEntity + relationships + column info
       - search_similar(query, n)      → embedding-based search in LanceDB (if available)
       - query_graph(cypher)           → arbitrary read-only Cypher query
@@ -82,8 +82,8 @@ class GraphQueryTool:
        Use this to see the structured database tables available for matching.
 
     3. {"action": "get_subject_context", "name": "<subject_name>"}
-       Returns: the Subject node + all Chunks that MENTION it + parent Documents.
-       Includes full text previews and summaries for understanding context.
+       Returns: the Subject node + all Documents that MENTION it + context.
+       Includes summaries and mention context for understanding what the subject means.
        Use this to deeply understand what a subject means in the document context.
 
     4. {"action": "get_domain_entity_detail", "name": "<entity_name>"}
@@ -91,7 +91,7 @@ class GraphQueryTool:
        Use this to understand what a structured table contains and how it connects.
 
     5. {"action": "search_similar", "query": "<natural language query>", "n": 5}
-       Returns: top-N chunks from the vector store most similar to the query.
+       Returns: top-N text fragments from the vector store most similar to the query.
        Use this to find document mentions of a concept — helpful for understanding
        whether a subject is really about a particular database table.
        NOTE: This action is only available if the vector store is connected.
@@ -178,20 +178,18 @@ class GraphQueryTool:
 
         subject = subj_records[0]
 
-        # Get chunks mentioning this subject
-        chunks = run_cypher(self.driver, """
-            MATCH (c:Chunk)-[r:MENTIONS]->(s:Subject {name: $name})
-            MATCH (d:Document)-[:CONTAINS]->(c)
-            RETURN c.chunk_id AS chunk_id, c.text_preview AS text_preview,
-                   c.summary AS summary, c.char_count AS char_count,
-                   r.context AS mention_context, d.name AS document
-            ORDER BY c.chunk_id
+        # Get documents mentioning this subject
+        docs = run_cypher(self.driver, """
+            MATCH (d:Document)-[r:MENTIONS]->(s:Subject {name: $name})
+            RETURN d.name AS document, d.topic_summary AS topic_summary,
+                   r.context AS mention_context
+            ORDER BY d.name
         """, {"name": subject["name"]})
 
         return json.dumps({
             "subject": subject,
-            "mentioned_in_chunks": chunks,
-            "total_chunks": len(chunks),
+            "mentioned_in_documents": docs,
+            "total_documents": len(docs),
         }, indent=2)
 
     def _get_domain_entity_detail(self, name: str) -> str:
@@ -467,7 +465,7 @@ class ResolutionAgent:
 
         ── STRATEGY ───────────────────────────────────────────────────────────
 
-        1. Start by understanding the subject — get its context from chunks.
+        1. Start by understanding the subject — get its context from documents.
         2. Examine each candidate domain entity to understand what it contains.
         3. Look for semantic overlap: does the subject's document context mention
            things that live in a particular table?
@@ -593,13 +591,13 @@ class ResolutionAgent:
         # Include basic subject info to kickstart
         subj = self.target_subject
         context_preview = ""
-        if subj.get("chunk_contexts"):
+        if subj.get("doc_contexts"):
             snippets = []
-            for cc in subj["chunk_contexts"][:3]:
+            for cc in subj["doc_contexts"][:3]:
                 if cc.get("mention_context"):
                     snippets.append(cc["mention_context"])
-                elif cc.get("summary"):
-                    snippets.append(cc["summary"])
+                elif cc.get("topic_summary"):
+                    snippets.append(cc["topic_summary"])
             context_preview = "; ".join(snippets)
 
         prompt = textwrap.dedent(f"""\

@@ -3,12 +3,16 @@ lexical_graph.py — Layer 2: Lexical Graph (from Unstructured Data)
 
 Pipeline:
   1. Load .txt documents from data/ directory
-  2. Chunk documents (paragraph-based splitting)
-  3. Embed chunks & store in LanceDB (local persistent vector DB)
-  4. Extract subjects/entities per chunk via LLM (simple single-call mode)
-  5. Build Lexical Graph in Neo4j (:Document → :Chunk → :Subject)
+  2. Chunk documents internally (for LLM context window management)
+  3. Embed chunks & store in LanceDB (local persistent vector DB for search)
+  4. Extract subjects/entities from chunks via LLM, mapped to parent documents
+  5. Build Lexical Graph in Neo4j (:Document → :Subject — no Chunk nodes in KG)
   6. Provide query interface (graph traversal + vector similarity)
   7. Visualize the graph
+
+Note: Chunks are used internally for LLM extraction and vector search but are
+      NOT stored as nodes in the knowledge graph. Subjects link directly to
+      their parent Documents.
 
 Prerequisites:
   - Neo4j running locally (same instance as Layer 1):
@@ -321,36 +325,47 @@ Respond with ONLY the summary text."""
 def deduplicate_subjects(subjects_by_chunk: dict) -> list[dict]:
     """
     Merge subjects across all chunks into a deduplicated list.
+    Tracks which *documents* each subject appears in (derived from chunk_id).
 
     Returns list of:
         {"name": str, "type": str, "description": str, "mention_count": int,
-         "mentioned_in": [chunk_id, ...]}
+         "mentioned_in_docs": [doc_name, ...],
+         "contexts_by_doc": {doc_name: [context_strings]}}
     """
     merged = {}  # normalized_name -> subject_data
 
     for chunk_id, subjects in subjects_by_chunk.items():
+        # Extract document name from chunk_id (format: "doc_name::chunk_N")
+        doc_name = chunk_id.split("::")[0] if "::" in chunk_id else chunk_id
+
         for subj in subjects:
             name = subj.get("name", "").strip()
             if not name:
                 continue
             norm_name = name.lower().strip()
 
+            context = subj.get("context", "")
+
             if norm_name in merged:
                 merged[norm_name]["mention_count"] += 1
-                if chunk_id not in merged[norm_name]["mentioned_in"]:
-                    merged[norm_name]["mentioned_in"].append(chunk_id)
-                # Keep the longer context
+                if doc_name not in merged[norm_name]["mentioned_in_docs"]:
+                    merged[norm_name]["mentioned_in_docs"].append(doc_name)
+                # Accumulate contexts per document
+                merged[norm_name]["contexts_by_doc"].setdefault(doc_name, [])
+                if context and context not in merged[norm_name]["contexts_by_doc"][doc_name]:
+                    merged[norm_name]["contexts_by_doc"][doc_name].append(context)
+                # Keep the longer context as main description
                 existing_ctx = merged[norm_name].get("description", "")
-                new_ctx = subj.get("context", "")
-                if len(new_ctx) > len(existing_ctx):
-                    merged[norm_name]["description"] = new_ctx
+                if len(context) > len(existing_ctx):
+                    merged[norm_name]["description"] = context
             else:
                 merged[norm_name] = {
                     "name": name,
                     "type": subj.get("type", "unknown"),
-                    "description": subj.get("context", ""),
+                    "description": context,
                     "mention_count": 1,
-                    "mentioned_in": [chunk_id],
+                    "mentioned_in_docs": [doc_name],
+                    "contexts_by_doc": {doc_name: [context]} if context else {doc_name: []},
                 }
 
     return list(merged.values())
@@ -367,7 +382,7 @@ def print_subjects(subjects_by_chunk: dict, deduped: list[dict]):
     for subj in sorted(deduped, key=lambda s: s["mention_count"], reverse=True):
         print(f"  [{subj['type']:10s}] {subj['name']}")
         print(f"              Mentions: {subj['mention_count']}  |  "
-              f"Chunks: {', '.join(subj['mentioned_in'])}")
+              f"Documents: {', '.join(subj['mentioned_in_docs'])}")
         if subj.get("description"):
             print(f"              Context: {subj['description'][:100]}")
     print(f"{'=' * 70}")
@@ -389,10 +404,11 @@ def build_lexical_graph(
     """
     Build the Lexical Graph in Neo4j:
       - :Document nodes (one per file)
-      - :Chunk nodes (one per text section)
       - :Subject nodes (deduplicated entities)
-      - :Document -[:CONTAINS]-> :Chunk
-      - :Chunk -[:MENTIONS]-> :Subject
+      - :Document -[:MENTIONS]-> :Subject
+
+    Note: Chunks are used internally for extraction and vector search
+    but are NOT stored as nodes in the knowledge graph.
     """
     if driver is None:
         driver = get_neo4j_driver()
@@ -400,11 +416,11 @@ def build_lexical_graph(
     # ── Clean existing Lexical Graph data (keep DomainEntity from Layer 1) ──
     print("  Clearing existing Lexical Graph data...")
     run_cypher_write(driver, "MATCH (n:Document) DETACH DELETE n")
-    run_cypher_write(driver, "MATCH (n:Chunk) DETACH DELETE n")
+    run_cypher_write(driver, "MATCH (n:Chunk) DETACH DELETE n")  # clean up any legacy Chunk nodes
     run_cypher_write(driver, "MATCH (n:Subject) DETACH DELETE n")
 
     # ── Create constraints ────────────────────────────────────────────────
-    for label, prop in [("Document", "name"), ("Chunk", "chunk_id"), ("Subject", "name")]:
+    for label, prop in [("Document", "name"), ("Subject", "name")]:
         try:
             run_cypher(
                 driver,
@@ -438,37 +454,9 @@ def build_lexical_graph(
                 "topic_summary": summary,
             },
         )
-        print(f"    + Document: {doc['name']} ({len(doc_chunks)} chunks)")
+        print(f"    + Document: {doc['name']} ({len(doc_chunks)} chunks used for extraction)")
 
-    # ── Insert Chunk nodes ────────────────────────────────────────────────
-    print("\n  Inserting Chunk nodes...")
-    for chunk in chunks:
-        summary = chunk_summaries.get(chunk["chunk_id"], "")
-        text_preview = chunk["text"][:200].replace("\n", " ")
-        run_cypher_write(
-            driver,
-            """
-            CREATE (c:Chunk {
-                chunk_id: $chunk_id,
-                doc_name: $doc_name,
-                chunk_index: $chunk_index,
-                text_preview: $text_preview,
-                summary: $summary,
-                char_count: $char_count
-            })
-            """,
-            {
-                "chunk_id": chunk["chunk_id"],
-                "doc_name": chunk["doc_name"],
-                "chunk_index": chunk["index"],
-                "text_preview": text_preview,
-                "summary": summary,
-                "char_count": len(chunk["text"]),
-            },
-        )
-        print(f"    + Chunk: {chunk['chunk_id']}")
-
-    # ── Insert Subject nodes ──────────────────────────────────────────────
+    # ── Insert Subject nodes ──────────────────────────────────────────
     print("\n  Inserting Subject nodes...")
     for subj in deduped_subjects:
         run_cypher_write(
@@ -490,64 +478,49 @@ def build_lexical_graph(
         )
         print(f"    + Subject: {subj['name']} ({subj['type']})")
 
-    # ── Insert CONTAINS edges (Document → Chunk) ─────────────────────────
-    print("\n  Inserting CONTAINS edges...")
-    for chunk in chunks:
-        run_cypher_write(
-            driver,
-            """
-            MATCH (d:Document {name: $doc_name})
-            MATCH (c:Chunk {chunk_id: $chunk_id})
-            CREATE (d)-[:CONTAINS {chunk_index: $chunk_index}]->(c)
-            """,
-            {
-                "doc_name": chunk["doc_name"],
-                "chunk_id": chunk["chunk_id"],
-                "chunk_index": chunk["index"],
-            },
-        )
-        print(f"    + {chunk['doc_name']} —[CONTAINS]→ {chunk['chunk_id']}")
+    # ── Insert MENTIONS edges (Document → Subject) ────────────────────
+    #    Aggregate contexts from all chunks of each document per subject.
+    print("\n  Inserting MENTIONS edges (Document → Subject)...")
+    for subj in deduped_subjects:
+        for doc_name in subj.get("mentioned_in_docs", []):
+            # Combine contexts from this document for this subject
+            contexts = subj.get("contexts_by_doc", {}).get(doc_name, [])
+            combined_context = "; ".join(c for c in contexts if c)[:500]
 
-    # ── Insert MENTIONS edges (Chunk → Subject) ──────────────────────────
-    print("\n  Inserting MENTIONS edges...")
-    for chunk_id, subjects in subjects_by_chunk.items():
-        for subj in subjects:
-            subj_name = subj.get("name", "").strip()
-            if not subj_name:
-                continue
-            context = subj.get("context", "")
             try:
                 run_cypher_write(
                     driver,
                     """
-                    MATCH (c:Chunk {chunk_id: $chunk_id})
+                    MATCH (d:Document {name: $doc_name})
                     MATCH (s:Subject {name: $subject_name})
-                    CREATE (c)-[:MENTIONS {context: $context}]->(s)
+                    CREATE (d)-[:MENTIONS {context: $context}]->(s)
                     """,
                     {
-                        "chunk_id": chunk_id,
-                        "subject_name": subj_name,
-                        "context": context,
+                        "doc_name": doc_name,
+                        "subject_name": subj["name"],
+                        "context": combined_context,
                     },
                 )
+                print(f"    + {doc_name} —[MENTIONS]→ {subj['name']}")
             except Exception:
-                # Subject might not match due to case differences — try case-insensitive
+                # Try case-insensitive fallback
                 try:
                     run_cypher_write(
                         driver,
                         """
-                        MATCH (c:Chunk {chunk_id: $chunk_id})
+                        MATCH (d:Document {name: $doc_name})
                         MATCH (s:Subject) WHERE toLower(s.name) = toLower($subject_name)
-                        CREATE (c)-[:MENTIONS {context: $context}]->(s)
+                        CREATE (d)-[:MENTIONS {context: $context}]->(s)
                         """,
                         {
-                            "chunk_id": chunk_id,
-                            "subject_name": subj_name,
-                            "context": context,
+                            "doc_name": doc_name,
+                            "subject_name": subj["name"],
+                            "context": combined_context,
                         },
                     )
+                    print(f"    + {doc_name} —[MENTIONS]→ {subj['name']} (case-insensitive)")
                 except Exception as e:
-                    print(f"    WARN: MENTIONS edge failed: {chunk_id} → {subj_name}: {e}")
+                    print(f"    WARN: MENTIONS edge failed: {doc_name} → {subj['name']}: {e}")
 
     print("\n  Lexical Graph built in Neo4j!")
     return driver
@@ -566,14 +539,13 @@ def query_lexical_graph(
 ) -> dict:
     """
     Two-pronged query over the Lexical Graph:
-      1. Graph traversal — keyword match on Subject names + Chunk summaries
+      1. Graph traversal — keyword match on Subject names + Document summaries
       2. Vector similarity — embed question, search LanceDB for top-K chunks
 
     Returns:
         {
             "graph_results": {
                 "subjects": [...],
-                "chunks": [...],
                 "documents": [...]
             },
             "vector_results": [
@@ -584,7 +556,7 @@ def query_lexical_graph(
     if driver is None:
         driver = get_neo4j_driver()
 
-    result = {"graph_results": {"subjects": [], "chunks": [], "documents": []}, "vector_results": []}
+    result = {"graph_results": {"subjects": [], "documents": []}, "vector_results": []}
 
     # ── 1. Graph traversal (keyword CONTAINS) ─────────────────────────
     stop_words = {
@@ -599,7 +571,6 @@ def query_lexical_graph(
     ]
 
     seen_subjects = set()
-    seen_chunks = set()
     seen_docs = set()
 
     for kw in keywords:
@@ -620,39 +591,38 @@ def query_lexical_graph(
                 rec["matched_keyword"] = kw
                 result["graph_results"]["subjects"].append(rec)
 
-        # Search Chunks (by summary)
+        # Search Documents (by summary)
         records = run_cypher(
             driver,
             """
-            MATCH (c:Chunk)
-            WHERE toLower(c.summary) CONTAINS $kw OR toLower(c.text_preview) CONTAINS $kw
-            RETURN c.chunk_id AS chunk_id, c.summary AS summary,
-                   c.doc_name AS doc_name, c.text_preview AS text_preview
+            MATCH (d:Document)
+            WHERE toLower(d.topic_summary) CONTAINS $kw OR toLower(d.name) CONTAINS $kw
+            RETURN d.name AS name, d.topic_summary AS topic_summary,
+                   d.chunk_count AS chunk_count, d.source_path AS source_path
             """,
             {"kw": kw},
         )
         for rec in records:
-            if rec["chunk_id"] not in seen_chunks:
-                seen_chunks.add(rec["chunk_id"])
+            if rec["name"] not in seen_docs:
+                seen_docs.add(rec["name"])
                 rec["matched_keyword"] = kw
-                result["graph_results"]["chunks"].append(rec)
+                result["graph_results"]["documents"].append(rec)
 
-    # Collect parent documents for matched chunks
-    for chunk in result["graph_results"]["chunks"]:
-        doc_name = chunk["doc_name"]
-        if doc_name not in seen_docs:
-            seen_docs.add(doc_name)
-            records = run_cypher(
-                driver,
-                """
-                MATCH (d:Document {name: $name})
-                RETURN d.name AS name, d.topic_summary AS topic_summary,
-                       d.chunk_count AS chunk_count, d.source_path AS source_path
-                """,
-                {"name": doc_name},
-            )
-            if records:
-                result["graph_results"]["documents"].append(records[0])
+    # Also collect parent documents for matching subjects
+    for subj in result["graph_results"]["subjects"]:
+        records = run_cypher(
+            driver,
+            """
+            MATCH (d:Document)-[:MENTIONS]->(s:Subject {name: $name})
+            RETURN d.name AS name, d.topic_summary AS topic_summary,
+                   d.chunk_count AS chunk_count, d.source_path AS source_path
+            """,
+            {"name": subj["name"]},
+        )
+        for rec in records:
+            if rec["name"] not in seen_docs:
+                seen_docs.add(rec["name"])
+                result["graph_results"]["documents"].append(rec)
 
     # ── 2. Vector similarity (LanceDB) ───────────────────────────────
     if lance_table is not None and embedding_client:
@@ -699,25 +669,19 @@ def print_query_results(question: str, results: dict):
             if s.get("description"):
                 print(f"               {s['description'][:80]}")
 
-    if gr["chunks"]:
-        print(f"\n  Graph — Matching Chunks ({len(gr['chunks'])}):")
-        for c in gr["chunks"]:
-            print(f"    {c['chunk_id']}")
-            print(f"      Summary: {c['summary'][:80]}")
-
     if gr["documents"]:
-        print(f"\n  Graph — Parent Documents ({len(gr['documents'])}):")
+        print(f"\n  Graph — Matching Documents ({len(gr['documents'])}):")
         for d in gr["documents"]:
             print(f"    {d['name']} — {d.get('topic_summary', '')[:80]}")
 
     # Vector results
     if vr:
-        print(f"\n  Vector — Top {len(vr)} Similar Chunks:")
+        print(f"\n  Vector — Top {len(vr)} Similar Chunks (from LanceDB):")
         for v in vr:
             print(f"    {v['chunk_id']}  (similarity: {v['score']})")
             print(f"      {v['text'][:120]}...")
 
-    if not gr["subjects"] and not gr["chunks"] and not vr:
+    if not gr["subjects"] and not gr["documents"] and not vr:
         print("  No matching results found.")
 
     print(f"{'=' * 70}")
@@ -744,17 +708,8 @@ def visualize_lexical_graph(driver=None):
         ORDER BY d.name
     """)
     for rec in records:
-        print(f"    :Document {rec['name']} — {rec.get('summary', '')[:60]} ({rec['chunks']} chunks)")
-
-    # Chunks
-    print("\n  Chunks:")
-    records = run_cypher(driver, """
-        MATCH (c:Chunk)
-        RETURN c.chunk_id AS chunk_id, c.summary AS summary, c.char_count AS chars
-        ORDER BY c.chunk_id
-    """)
-    for rec in records:
-        print(f"    :Chunk {rec['chunk_id']} — {rec.get('summary', '')[:60]} ({rec['chars']} chars)")
+        print(f"    :Document {rec['name']} — {rec.get('summary', '')[:60]} "
+              f"({rec['chunks']} chunks used for extraction)")
 
     # Subjects
     print("\n  Subjects:")
@@ -766,37 +721,27 @@ def visualize_lexical_graph(driver=None):
     for rec in records:
         print(f"    :Subject [{rec['type']:10s}] {rec['name']} (mentioned {rec['mentions']}x)")
 
-    # Edges: CONTAINS
-    print("\n  Edges (CONTAINS):")
+    # Edges: MENTIONS (Document → Subject)
+    print("\n  Edges (MENTIONS — Document → Subject):")
     records = run_cypher(driver, """
-        MATCH (d:Document)-[r:CONTAINS]->(c:Chunk)
-        RETURN d.name AS doc, c.chunk_id AS chunk, r.chunk_index AS idx
-        ORDER BY d.name, r.chunk_index
-    """)
-    for rec in records:
-        print(f"    {rec['doc']} —[CONTAINS]→ {rec['chunk']}")
-
-    # Edges: MENTIONS
-    print("\n  Edges (MENTIONS):")
-    records = run_cypher(driver, """
-        MATCH (c:Chunk)-[r:MENTIONS]->(s:Subject)
-        RETURN c.chunk_id AS chunk, s.name AS subject, r.context AS context
-        ORDER BY c.chunk_id
+        MATCH (d:Document)-[r:MENTIONS]->(s:Subject)
+        RETURN d.name AS doc, s.name AS subject, r.context AS context
+        ORDER BY d.name, s.name
     """)
     for rec in records:
         ctx = (rec.get("context") or "")[:50]
-        print(f"    {rec['chunk']} —[MENTIONS]→ {rec['subject']}  ({ctx})")
+        print(f"    {rec['doc']} —[MENTIONS]→ {rec['subject']}  ({ctx})")
 
     # Count summary
     print(f"\n  Summary:")
-    for label in ["Document", "Chunk", "Subject"]:
+    for label in ["Document", "Subject"]:
         count = run_cypher(driver, f"MATCH (n:{label}) RETURN count(n) AS c")[0]["c"]
         print(f"    {label} nodes: {count}")
     edge_count = run_cypher(
         driver,
-        "MATCH ()-[r]->() WHERE type(r) IN ['CONTAINS', 'MENTIONS'] RETURN count(r) AS c",
+        "MATCH ()-[r:MENTIONS]->() RETURN count(r) AS c",
     )[0]["c"]
-    print(f"    CONTAINS + MENTIONS edges: {edge_count}")
+    print(f"    MENTIONS edges: {edge_count}")
 
     print(f"{'=' * 70}")
 
@@ -860,21 +805,19 @@ def main():
     print_subjects(subjects_by_chunk, deduped_subjects)
 
     # Generate summaries
-    print("\n[Step 4b] Generating document & chunk summaries...")
+    print("\n[Step 4b] Generating document summaries...")
     doc_summaries = {}
     for doc in documents:
         print(f"  Summarizing document: {doc['name']}...", end=" ", flush=True)
         doc_summaries[doc["name"]] = generate_document_summary(doc, llm_client)
         print("OK")
 
+    # chunk_summaries kept as empty dict (no longer stored in graph, but
+    # build_lexical_graph signature accepts it for compatibility)
     chunk_summaries = {}
-    for chunk in all_chunks:
-        print(f"  Summarizing chunk: {chunk['chunk_id']}...", end=" ", flush=True)
-        chunk_summaries[chunk["chunk_id"]] = generate_chunk_summary(chunk, llm_client)
-        print("OK")
 
     # Step 5: Build graph
-    print("\n[Step 5] Building Lexical Graph in Neo4j...")
+    print("\n[Step 5] Building Lexical Graph in Neo4j (Document → Subject, no Chunk nodes)...")
     driver = get_neo4j_driver()
     build_lexical_graph(
         documents, all_chunks, subjects_by_chunk, deduped_subjects,
@@ -901,7 +844,7 @@ def main():
 
     driver.close()
     print("\nDone! View your Lexical Graph at http://localhost:7474")
-    print("Try: MATCH (d:Document)-[:CONTAINS]->(c:Chunk)-[:MENTIONS]->(s:Subject) RETURN d, c, s")
+    print("Try: MATCH (d:Document)-[:MENTIONS]->(s:Subject) RETURN d, s")
 
 
 if __name__ == "__main__":
