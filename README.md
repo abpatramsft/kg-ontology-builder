@@ -27,7 +27,7 @@ Unstructured Sources          Structured Sources         Structured Sources
 
 | Layer | Source | What it captures | Status |
 |---|---|---|---|
-| **Layer 1 — Domain Graph** | SQLite DB | Schema semantics: table descriptions, domains, FK + semantic relationships | ✅ Complete |
+| **Layer 1 — Domain Graph** | SQLite DB | Schema semantics: table descriptions, domains, FK + semantic relationships + abstract Concept nodes (cross-table normalized) | ✅ Complete |
 | **Layer 2 — Lexical Graph** | Text files | Document landscape: Document → Subject → Object (SPO triplets) + vector embeddings | ✅ Complete |
 | **Layer 3 — Subject Graph** | Cross-layer | Bridge: `CORRESPONDS_TO` edges linking unstructured subjects to structured entities | ✅ Complete |
 | **Inference Agent** | All layers | ReAct agent that navigates the KG + vector DB + SQL to answer questions | ✅ Complete |
@@ -53,7 +53,7 @@ KG_ontology_generation/
 │
 ├── domain_graph/                   # Layer 1 — Domain Graph (structured data)
 │   ├── __init__.py
-│   ├── domain_graph.py             # Full pipeline: introspect → enrich → build → query
+│   ├── domain_graph.py             # Full pipeline: introspect → enrich → normalize concepts → build → query
 │   └── enrich_advanced.py          # ReAct agent with SQLDBQueryTool
 │
 ├── lexical_graph/                  # Layer 2 — Lexical Graph (unstructured data)
@@ -156,10 +156,55 @@ python domain_graph/enrich_advanced.py
 #### What the pipeline does:
 
 1. **Introspect** — reads SQLite schema (tables, columns, PKs, FKs, row counts)
-2. **Enrich** — LLM generates descriptions, domain labels, and semantic relationships for each table
-3. **Build** — creates `DomainEntity` nodes and relationship edges in Neo4j
-4. **Query** — keyword-based search over the graph for agent routing
-5. **Visualize** — prints the full graph (nodes + edges)
+2. **Enrich** — LLM generates descriptions, domain labels, semantic relationships, and 2-5 abstract **concepts** per table (e.g., "Aircraft Component", "Supplier Relationship")
+3. **Normalize Concepts** — LLM-based cross-table concept resolution: identifies merge groups (same concept from different tables, e.g., "Vendor Management" from parts + "Supplier Relationship" from suppliers), merges to canonical names, and detects cross-links between distinct but related concepts
+4. **Build** — creates `DomainEntity` nodes, `Concept` nodes, relationship edges (`HAS_FK`, semantic, `HAS_CONCEPT`, `RELATED_CONCEPT`) in Neo4j
+5. **Query** — keyword-based search over both DomainEntity and Concept nodes for agent routing
+6. **Visualize** — prints the full graph (DomainEntity nodes, Concept nodes, all edge types)
+
+#### Neo4j Schema (Layer 1):
+
+```
+(:DomainEntity {name, description, domain, key_columns, column_info, row_count})
+    -[:HAS_FK {reason}]->
+(:DomainEntity)
+
+(:DomainEntity)
+    -[:HAS_CONCEPT {derived_from}]->
+(:Concept {name, description, source_tables, derived_from, shared})
+
+(:Concept)
+    -[:RELATED_CONCEPT {relationship_type, reason}]->
+(:Concept)
+```
+
+- **Concept nodes** represent abstract business ideas derived from table columns (not raw data values).
+- A concept with `shared: true` is linked via `HAS_CONCEPT` from multiple DomainEntity nodes — these are cross-table concepts that interlink otherwise separate tables.
+- `RELATED_CONCEPT` edges capture semantic relationships between distinct concepts (e.g., "Aircraft Component" → COMPOSED_OF → "Assembly Structure").
+- Concept normalization mirrors the entity resolution pattern from Layer 2: LLM-based merge groups with canonical names.
+
+#### Graph Visualization
+
+![Domain Graph](docs/assets/domain_graph.png)
+
+#### Sample Cypher queries:
+
+```cypher
+-- All DomainEntity nodes with their concepts
+MATCH (d:DomainEntity)-[:HAS_CONCEPT]->(c:Concept) RETURN d.name, c.name, c.description
+
+-- Shared concepts (cross-table)
+MATCH (c:Concept {shared: true})<-[:HAS_CONCEPT]-(d:DomainEntity)
+RETURN c.name, c.description, collect(d.name) AS tables
+
+-- Concept cross-links
+MATCH (a:Concept)-[r:RELATED_CONCEPT]->(b:Concept)
+RETURN a.name, r.relationship_type, b.name, r.reason
+
+-- Full Layer 1 graph (entities + concepts)
+MATCH (n) WHERE n:DomainEntity OR n:Concept
+OPTIONAL MATCH (n)-[r]-(m) RETURN n, r, m
+```
 
 ---
 
@@ -198,6 +243,10 @@ python lexical_graph/lexical_graph.py --advanced
 ```
 
 The SPO model captures **what** each subject does/has/causes, not just that it exists. A single Subject can fan out to multiple Object nodes via different predicates — e.g., `Collins Aerospace → supplies → smoke detectors` and `Collins Aerospace → reported_issue → false alarm`.
+
+#### Graph Visualization
+
+![Lexical Graph](docs/assets/lexical_graph.png)
 
 #### Sample Cypher queries:
 
@@ -278,6 +327,10 @@ python -m subject_graph.enrich_advanced
 (:DomainEntity {name, description, domain, key_columns})
 ```
 
+#### Graph Visualization
+
+![Unified Subject Graph](docs/assets/unified_subject_graph.png)
+
 #### Sample Cypher queries:
 
 ```cypher
@@ -310,7 +363,7 @@ Both layers follow the same dual-mode pattern: a fast single-shot mode and a dee
 
 #### Single-shot (`enrich_with_llm`)
 
-One LLM call per table. Sends schema metadata (column names, types, FKs) and asks for a JSON description. Fast but shallow — the LLM never sees actual data values.
+One LLM call per table. Sends schema metadata (column names, types, FKs) and asks for a JSON description including 2-5 abstract concepts. Fast but shallow — the LLM never sees actual data values.
 
 #### ReAct Agent (`enrich_with_llm_advanced`)
 
@@ -330,7 +383,7 @@ The agent has a single tool — `SQLDBQueryTool` — with 6 actions:
 
 Typical agent run per table: **5-7 iterations** of tool use before producing a final answer.
 
-A cross-table **validation checkpoint** runs after all tables are enriched, catching inconsistencies and missing relationships.
+A cross-table **validation checkpoint** runs after all tables are enriched, catching inconsistencies and missing relationships. Both modes also extract abstract **concepts** per table, which are then **normalized across tables** via a dedicated LLM call that identifies merge groups (same concept, different names) and cross-links (distinct but related concepts).
 
 | Aspect | Single-shot | ReAct Agent |
 |---|---|---|
@@ -338,6 +391,8 @@ A cross-table **validation checkpoint** runs after all tables are enriched, catc
 | Sees actual data | No | Yes (sample rows, JOINs) |
 | FK chain depth | Direct only | Multi-hop traversal |
 | Cross-table validation | No | Yes |
+| Concepts per table | 2-5 | 2-5 |
+| Cross-table concept normalization | Yes (post-enrichment) | Yes (post-enrichment) |
 | Semantic edges (our DB) | ~7 | ~12 |
 
 ---
@@ -451,7 +506,7 @@ python agent_inference.py
 
 | Tool | Backend | Actions |
 |---|---|---|
-| **`graph_ontology_tool`** | Neo4j | `list_node_labels`, `list_relationship_types`, `list_domain_entities`, `list_subjects` (with SPO triplets), `list_documents`, `get_domain_entity_detail`, `get_subject_context` (with RELATES_TO), `get_correspondences`, `find_path`, `query_graph` |
+| **`graph_ontology_tool`** | Neo4j | `list_node_labels`, `list_relationship_types`, `list_domain_entities`, `list_subjects` (with SPO triplets), `list_documents`, `get_domain_entity_detail` (includes linked Concept nodes), `get_subject_context` (with RELATES_TO), `get_correspondences`, `find_path`, `query_graph` |
 | **`vector_search_tool`** | LanceDB | `search(query, n)` — semantic similarity search across all embedded document chunks; `search_by_document(query, doc_name, n)` — filtered search within a specific document |
 | **`sql_query_tool`** | SQLite | `list_tables`, `describe_table`, `query(sql)` — read-only SQL access to the structured data |
 
@@ -509,13 +564,28 @@ After building, explore in the **Neo4j Browser** at http://localhost:7474:
 -- All Domain Graph nodes and edges (Layer 1)
 MATCH (n:DomainEntity)-[r]->(m) RETURN n, r, m
 
+-- Domain entities with their concepts
+MATCH (d:DomainEntity)-[:HAS_CONCEPT]->(c:Concept) RETURN d.name, c.name, c.description
+
+-- Shared concepts (linked to multiple tables)
+MATCH (c:Concept {shared: true})<-[:HAS_CONCEPT]-(d:DomainEntity)
+RETURN c.name, collect(d.name) AS tables, c.description
+
+-- Concept cross-links
+MATCH (a:Concept)-[r:RELATED_CONCEPT]->(b:Concept)
+RETURN a.name, r.relationship_type, b.name
+
+-- Full Layer 1 graph (entities + concepts + all edges)
+MATCH (n) WHERE n:DomainEntity OR n:Concept
+OPTIONAL MATCH (n)-[r]-(m) RETURN n, r, m
+
 -- All Lexical Graph nodes and edges (Layer 2)
 MATCH (d:Document)-[r:MENTIONS]->(s:Subject)
 OPTIONAL MATCH (s)-[rt:RELATES_TO]->(o:Object)
 RETURN d, r, s, rt, o
 
 -- Both layers together
-MATCH (n) WHERE n:DomainEntity OR n:Document OR n:Subject OR n:Object
+MATCH (n) WHERE n:DomainEntity OR n:Concept OR n:Document OR n:Subject OR n:Object
 OPTIONAL MATCH (n)-[r]-(m)
 RETURN n, r, m
 
@@ -529,7 +599,7 @@ MATCH (n:DomainEntity {name: "suppliers"}) RETURN n
 -- Find a specific subject (Layer 2)
 MATCH (s:Subject {name: "A320neo"}) RETURN s
 
--- All relationships for a table
+-- All relationships for a table (including concepts)
 MATCH (n:DomainEntity {name: "parts"})-[r]-(m) RETURN n, r, m
 
 -- Tables in a domain
@@ -549,7 +619,7 @@ RETURN path
 | Graph DB | Neo4j 5 Community (Docker) | Stores the KG ontology (all 3 layers) |
 | Vector DB | LanceDB (local, on-disk) | Chunk embeddings + similarity search (Layer 2) |
 | Structured DB | SQLite (stdlib) | Source data for Layer 1 |
-| LLM | Azure OpenAI GPT-4.1 | Schema enrichment + entity extraction + inference |
+| LLM | Azure OpenAI GPT-4.1 | Schema enrichment + concept extraction/normalization + entity extraction + inference |
 | Embeddings | Azure OpenAI text-embedding-3-small | Chunk vectorization for Layer 2 |
 | Web Framework | Flask + SSE | Inference agent web UI with real-time streaming |
 | Auth | DefaultAzureCredential | Token-based, no API keys |

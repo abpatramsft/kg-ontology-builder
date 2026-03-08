@@ -379,8 +379,21 @@ class EnrichmentAgent:
               "relationship_type": "UPPER_SNAKE_CASE label (e.g., PART_OF, SUPPLIES, BELONGS_TO, COMPOSED_OF)",
               "reason": "1 sentence explaining WHY this semantic relationship exists, grounded in the data you observed"
             }}
+          ],
+          "concepts": [
+            {{
+              "name": "<Abstract business concept derived from this table, e.g. 'Aircraft Component', 'Supplier Relationship'>",
+              "description": "1 sentence: what this concept represents in the airline/aviation domain",
+              "derived_from": ["<column_name_1>", "<column_name_2>"]
+            }}
           ]
         }}
+
+        CONCEPT GUIDELINES:
+        - Extract 2-5 abstract business concepts per table.
+        - Concepts are HIGH-LEVEL ideas (e.g., 'Aircraft Component', 'Procurement Lifecycle'), NOT raw column names or data values.
+        - derived_from lists the column(s) that evidence this concept.
+        - Think about what business themes this table's data represents.
 
         ── STRATEGY ──────────────────────────────────────────────────────────
 
@@ -547,6 +560,7 @@ class EnrichmentAgent:
             "description": result.get("description", f"Database table '{self.target_table}'."),
             "domain": result.get("domain", "unknown"),
             "semantic_relationships": [],
+            "concepts": [],
         }
 
         for rel in result.get("semantic_relationships", []):
@@ -558,6 +572,15 @@ class EnrichmentAgent:
                         "relationship_type": rel.get("relationship_type", "RELATED_TO"),
                         "reason": rel.get("reason", ""),
                     })
+
+        # Validate and normalize concepts
+        for concept in result.get("concepts", []):
+            if isinstance(concept, dict) and concept.get("name"):
+                normalized["concepts"].append({
+                    "name": concept.get("name", "Unknown"),
+                    "description": concept.get("description", ""),
+                    "derived_from": concept.get("derived_from", []),
+                })
 
         return normalized
 
@@ -600,6 +623,7 @@ class EnrichmentAgent:
             "description": f"Database table '{self.target_table}'.",
             "domain": "unknown",
             "semantic_relationships": [],
+            "concepts": [],
         }
 
 
@@ -634,6 +658,8 @@ def validate_enrichments(
        (e.g., if table A says A→B is PART_OF, table B should acknowledge the inverse)
     2. Completeness: Are any obvious semantic relationships missing?
     3. Quality: Are descriptions accurate, specific, and grounded in aviation/airline domain?
+    4. Concepts: Does each table have 2-5 meaningful abstract concepts? Are concept names
+       appropriately abstract (not raw column names)? Are derived_from columns correct?
 
     Tables: {all_tables}
 
@@ -644,7 +670,7 @@ def validate_enrichments(
     VALIDATED
 
     If you want to fix issues, respond with the COMPLETE corrected JSON (same schema,
-    all tables included) — no extra text, just the JSON object.
+    all tables included, including the "concepts" array for each table) — no extra text, just the JSON object.
     """)
 
     completion = client.chat.completions.create(

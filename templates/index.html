@@ -383,10 +383,10 @@ header p { color: var(--text-dim); font-size: .82rem; }
   </div>
 
   <div class="samples">
-    <button onclick="fillSample(this)">Which suppliers provide parts for the A320neo landing gear?</button>
-    <button onclick="fillSample(this)">What do documents say about engine issues?</button>
-    <button onclick="fillSample(this)">Bridge brake assembly from docs to structured data</button>
-    <button onclick="fillSample(this)">What aircraft models does IndiGo operate?</button>
+    <button onclick="fillSample(this)">For every supplier whose rating was downgraded in the Q3 quality review, find their contracted parts, the assembly those parts belong to, and the aircraft model affected. Cross-reference with any customer complaints mentioning those same components.</button>
+    <button onclick="fillSample(this)">Trace the full supply chain path from Pratt & Whitney (the supplier) to every aircraft model they supply, showing each intermediate step (part → assembly → product). For each aircraft model, summarize any engine-related issues mentioned in the unstructured quality reviews</button>
+    <button onclick="fillSample(this)">The database lists Honeywell Aerospace with a rating of 4.7, but the quality review mentions their rating was downgraded to 4.3 due to brake disc issues. Identify all such discrepancies between the structured supplier ratings and the ratings mentioned in the unstructured text. What is the root cause for each discrepancy?</button>
+    <button onclick="fillSample(this)">The customer feedback report shows lavatory issues increased 32.8% and cabin air quality complaints increased 41.9% from Q2 to Q3. Using the ontology, identify which specific suppliers and parts are involved in these complaint categories, and check if those suppliers/parts appear in the quality review with any known issues</button>
   </div>
 
   <div class="timeline" id="timeline">

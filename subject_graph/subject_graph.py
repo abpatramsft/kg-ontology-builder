@@ -183,6 +183,16 @@ def fetch_domain_entities(driver=None) -> list[dict]:
                 "reason": r.get("reason", ""),
             })
 
+        # Fetch linked Concept nodes
+        concept_records = run_cypher(driver, """
+            MATCH (d:DomainEntity {name: $name})-[:HAS_CONCEPT]->(c:Concept)
+            RETURN c.name AS name, c.description AS description, c.shared AS shared
+        """, {"name": rec["name"]})
+        concepts = [
+            {"name": cr["name"], "description": cr.get("description", ""), "shared": cr.get("shared", False)}
+            for cr in concept_records
+        ]
+
         entities.append({
             "name": rec["name"],
             "description": rec["description"] or "",
@@ -191,6 +201,7 @@ def fetch_domain_entities(driver=None) -> list[dict]:
             "column_info": rec["column_info"] or "[]",
             "row_count": rec["row_count"] or 0,
             "relationships": relationships,
+            "concepts": concepts,
         })
 
     return entities
@@ -277,6 +288,11 @@ def build_domain_entity_text(entity: dict) -> str:
     ]
     if rel_labels:
         parts.append(f"| Related: {'; '.join(rel_labels)}")
+
+    # Add concept names for richer semantic matching
+    concept_names = [c["name"] for c in entity.get("concepts", []) if c.get("name")]
+    if concept_names:
+        parts.append(f"| Concepts: {', '.join(concept_names)}")
 
     return " ".join(parts)
 

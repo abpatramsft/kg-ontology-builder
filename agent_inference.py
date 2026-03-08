@@ -94,6 +94,8 @@ class GraphOntologyTool:
 
     Graph model:
     - :DomainEntity nodes (structured DB tables) connected by FK/SEMANTIC edges
+    - :Concept nodes (abstract business concepts) connected to DomainEntity via HAS_CONCEPT
+      Concepts may be shared across multiple tables. Cross-linked via RELATED_CONCEPT edges.
     - :Document nodes (source files) → :Subject nodes (via MENTIONS)
     - :Subject nodes → :Object nodes (via RELATES_TO {predicate})
       Each Subject-RELATES_TO-Object edge represents an SPO triplet extracted from documents.
@@ -122,8 +124,9 @@ class GraphOntologyTool:
 
     6. {"action": "get_domain_entity_detail", "name": "<entity_name>"}
        Returns: full detail for a DomainEntity — description, column info,
-       all relationships (FK, SEMANTIC) to other entities.
-       Use this to understand what a structured table contains.
+       all relationships (FK, SEMANTIC) to other entities, and linked Concept nodes.
+       Concepts are abstract business ideas derived from the table's columns.
+       Use this to understand what a structured table contains and what it represents.
 
     7. {"action": "get_subject_context", "name": "<subject_name>"}
        Returns: the Subject node + all Documents that MENTION it +
@@ -267,11 +270,28 @@ class GraphOntologyTool:
                    r.confidence AS confidence, r.reason AS reason
         """, {"name": entity["name"]})
 
+        # Concepts linked to this entity
+        concepts = run_cypher(self.driver, """
+            MATCH (d:DomainEntity {name: $name})-[r:HAS_CONCEPT]->(c:Concept)
+            OPTIONAL MATCH (c)-[rc:RELATED_CONCEPT]->(c2:Concept)
+            RETURN c.name AS concept_name, c.description AS concept_desc,
+                   c.shared AS shared, r.derived_from AS derived_from,
+                   collect(DISTINCT {related: c2.name, type: rc.relationship_type, reason: rc.reason}) AS related_concepts
+        """, {"name": entity["name"]})
+
+        # Clean up related_concepts (remove nulls from OPTIONAL MATCH)
+        for c in concepts:
+            c["related_concepts"] = [
+                r for r in c.get("related_concepts", [])
+                if r.get("related") is not None
+            ]
+
         return json.dumps({
             "entity": entity,
             "outgoing_relationships": out_rels,
             "incoming_relationships": in_rels,
             "corresponding_subjects": correspondences,
+            "concepts": concepts,
         }, indent=2)
 
     def _get_subject_context(self, name: str) -> str:
