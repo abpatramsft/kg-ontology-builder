@@ -5,14 +5,16 @@ Pipeline:
   1. Load .txt documents from data/ directory
   2. Chunk documents internally (for LLM context window management)
   3. Embed chunks & store in LanceDB (local persistent vector DB for search)
-  4. Extract subjects/entities from chunks via LLM, mapped to parent documents
-  5. Build Lexical Graph in Neo4j (:Document → :Subject — no Chunk nodes in KG)
+  4. Extract ONE SPO (Subject–Predicate–Object) triplet per chunk via LLM
+  5. Build Lexical Graph in Neo4j:
+        :Document -[:MENTIONS]-> :Subject -[:RELATES_TO {predicate}]-> :Object
+     (no Chunk nodes in KG)
   6. Provide query interface (graph traversal + vector similarity)
   7. Visualize the graph
 
 Note: Chunks are used internally for LLM extraction and vector search but are
-      NOT stored as nodes in the knowledge graph. Subjects link directly to
-      their parent Documents.
+      NOT stored as nodes in the knowledge graph. Each chunk produces exactly
+      one SPO triplet that captures its core meaning.
 
 Prerequisites:
   - Neo4j running locally (same instance as Layer 1):
@@ -234,61 +236,71 @@ def store_chunks_in_vectordb(
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  Step 4 — Extract Subjects / Entities per Chunk (Simple Mode)
+#  Step 4 — Extract SPO Triplets per Chunk (Simple Mode)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def extract_subjects_simple(chunks: list[dict], llm_client) -> dict:
+def extract_spo_triplets_simple(chunks: list[dict], llm_client) -> dict:
     """
-    For each chunk, call LLM to extract named entities and key concepts.
+    For each chunk, call LLM to extract a single SPO (Subject–Predicate–Object)
+    triplet that captures the core meaning of the chunk.
 
     Returns:
         {
-            "chunk_id": [
-                {"name": str, "type": str, "context": str},
-                ...
-            ],
+            "chunk_id": {
+                "subject": str,
+                "subject_type": str,
+                "predicate": str,
+                "object": str,
+                "object_type": str
+            },
             ...
         }
     """
-    subjects_by_chunk = {}
+    spo_by_chunk = {}
 
     for chunk in chunks:
-        prompt = f"""You are an NER / entity extraction system analyzing IndiGo Airlines
+        prompt = f"""You are an information extraction system analyzing IndiGo Airlines
 maintenance and quality review documents.
 
-Given the text chunk below, extract ALL named entities, technical components, and key concepts.
+Given the text chunk below, extract ONE SPO (Subject–Predicate–Object) triplet that
+best captures the core meaning of the entire chunk.
 
-Return a JSON array of objects with these fields:
-- "name": the entity name (use the most specific form, e.g., "PW1100G" not just "engine")
-- "type": one of: "aircraft", "assembly", "part", "supplier", "person", "event", "metric", "system", "location"
-- "context": a brief phrase (10-20 words) from the text explaining why this entity is mentioned
+Return a JSON object with these fields:
+- "subject": the main entity/concept (specific: e.g., "PW1100G engine" not just "engine")
+- "subject_type": one of: aircraft, assembly, part, supplier, person, event, metric, system, location
+- "predicate": the relationship/action connecting subject to object (e.g., "shows performance degradation in", "requires inspection of", "was supplied by")
+- "object": the target entity/concept the subject relates to
+- "object_type": one of: aircraft, assembly, part, supplier, person, event, metric, system, location
 
 Rules:
-- Extract specific product models, part numbers, supplier names, aircraft registrations
-- Include technical systems and subsystems (e.g., "landing gear assembly", "FADEC controller")
-- Include performance metrics and ratings if mentioned
-- Do NOT include generic words — each entity should be a proper noun or specific technical term
-- Deduplicate: if an entity appears multiple times, include it once with the most informative context
+- Extract the SINGLE most important SPO triplet that summarizes what this chunk is about
+- Subject and object should be specific proper nouns or technical terms, not generic words
+- The predicate should be a concise verbal phrase that connects subject to object
+- Together, the triplet should capture the chunk's core message
+- Example: {{"subject": "PW1100G engine", "subject_type": "assembly", "predicate": "shows performance degradation in", "object": "high-altitude operations", "object_type": "event"}}
 
 Text chunk:
 ---
 {chunk['text']}
 ---
 
-Respond ONLY with a valid JSON array, no markdown fences, no extra text."""
+Respond ONLY with a valid JSON object, no markdown fences, no extra text."""
 
-        print(f"  Extracting entities: {chunk['chunk_id']}...", end=" ", flush=True)
+        print(f"  Extracting SPO triplet: {chunk['chunk_id']}...", end=" ", flush=True)
         response = call_llm(llm_client, prompt)
         parsed = parse_llm_json(response)
 
-        if parsed and isinstance(parsed, list):
-            subjects_by_chunk[chunk["chunk_id"]] = parsed
-            print(f"OK — {len(parsed)} entities")
+        if parsed and isinstance(parsed, dict) and "subject" in parsed and "object" in parsed:
+            spo_by_chunk[chunk["chunk_id"]] = parsed
+            print(f"OK — ({parsed['subject']} → {parsed.get('predicate', '?')} → {parsed['object']})")
         else:
-            print("WARN: parse failed, using empty list")
-            subjects_by_chunk[chunk["chunk_id"]] = []
+            print("WARN: parse failed, using empty triplet")
+            spo_by_chunk[chunk["chunk_id"]] = {
+                "subject": "", "subject_type": "unknown",
+                "predicate": "", "object": "", "object_type": "unknown",
+            }
 
-    return subjects_by_chunk
+    return spo_by_chunk
 
 
 def generate_document_summary(doc: dict, llm_client) -> str:
@@ -322,69 +334,302 @@ Respond with ONLY the summary text."""
     return call_llm(llm_client, prompt).strip()
 
 
-def deduplicate_subjects(subjects_by_chunk: dict) -> list[dict]:
+def deduplicate_spo_triplets(spo_by_chunk: dict) -> dict:
     """
-    Merge subjects across all chunks into a deduplicated list.
-    Tracks which *documents* each subject appears in (derived from chunk_id).
+    Merge SPO triplets across all chunks into deduplicated subjects, objects,
+    and triplets. Tracks which documents each entity appears in.
 
-    Returns list of:
-        {"name": str, "type": str, "description": str, "mention_count": int,
-         "mentioned_in_docs": [doc_name, ...],
-         "contexts_by_doc": {doc_name: [context_strings]}}
+    Returns:
+        {
+            "subjects": [
+                {"name": str, "type": str, "mention_count": int,
+                 "mentioned_in_docs": [doc_name, ...],
+                 "spo_contexts": [{"predicate": str, "object": str, "doc_name": str}]}
+            ],
+            "objects": [
+                {"name": str, "type": str, "mention_count": int,
+                 "mentioned_in_docs": [doc_name, ...]}
+            ],
+            "triplets": [
+                {"subject": str, "predicate": str, "object": str,
+                 "chunk_id": str, "doc_name": str}
+            ]
+        }
     """
-    merged = {}  # normalized_name -> subject_data
+    subjects_merged = {}  # normalized_name -> subject_data
+    objects_merged = {}   # normalized_name -> object_data
+    triplets = []
 
-    for chunk_id, subjects in subjects_by_chunk.items():
-        # Extract document name from chunk_id (format: "doc_name::chunk_N")
+    for chunk_id, spo in spo_by_chunk.items():
         doc_name = chunk_id.split("::")[0] if "::" in chunk_id else chunk_id
 
-        for subj in subjects:
-            name = subj.get("name", "").strip()
-            if not name:
-                continue
-            norm_name = name.lower().strip()
+        subj_name = spo.get("subject", "").strip()
+        obj_name = spo.get("object", "").strip()
+        predicate = spo.get("predicate", "").strip()
 
-            context = subj.get("context", "")
+        if not subj_name or not obj_name:
+            continue
 
-            if norm_name in merged:
-                merged[norm_name]["mention_count"] += 1
-                if doc_name not in merged[norm_name]["mentioned_in_docs"]:
-                    merged[norm_name]["mentioned_in_docs"].append(doc_name)
-                # Accumulate contexts per document
-                merged[norm_name]["contexts_by_doc"].setdefault(doc_name, [])
-                if context and context not in merged[norm_name]["contexts_by_doc"][doc_name]:
-                    merged[norm_name]["contexts_by_doc"][doc_name].append(context)
-                # Keep the longer context as main description
-                existing_ctx = merged[norm_name].get("description", "")
-                if len(context) > len(existing_ctx):
-                    merged[norm_name]["description"] = context
-            else:
-                merged[norm_name] = {
-                    "name": name,
-                    "type": subj.get("type", "unknown"),
-                    "description": context,
-                    "mention_count": 1,
-                    "mentioned_in_docs": [doc_name],
-                    "contexts_by_doc": {doc_name: [context]} if context else {doc_name: []},
+        # Track triplet
+        triplets.append({
+            "subject": subj_name,
+            "predicate": predicate,
+            "object": obj_name,
+            "chunk_id": chunk_id,
+            "doc_name": doc_name,
+        })
+
+        # Merge subjects
+        norm_subj = subj_name.lower().strip()
+        if norm_subj in subjects_merged:
+            subjects_merged[norm_subj]["mention_count"] += 1
+            if doc_name not in subjects_merged[norm_subj]["mentioned_in_docs"]:
+                subjects_merged[norm_subj]["mentioned_in_docs"].append(doc_name)
+            subjects_merged[norm_subj]["spo_contexts"].append({
+                "predicate": predicate, "object": obj_name, "doc_name": doc_name,
+            })
+        else:
+            subjects_merged[norm_subj] = {
+                "name": subj_name,
+                "type": spo.get("subject_type", "unknown"),
+                "mention_count": 1,
+                "mentioned_in_docs": [doc_name],
+                "spo_contexts": [{"predicate": predicate, "object": obj_name, "doc_name": doc_name}],
+            }
+
+        # Merge objects
+        norm_obj = obj_name.lower().strip()
+        if norm_obj in objects_merged:
+            objects_merged[norm_obj]["mention_count"] += 1
+            if doc_name not in objects_merged[norm_obj]["mentioned_in_docs"]:
+                objects_merged[norm_obj]["mentioned_in_docs"].append(doc_name)
+        else:
+            objects_merged[norm_obj] = {
+                "name": obj_name,
+                "type": spo.get("object_type", "unknown"),
+                "mention_count": 1,
+                "mentioned_in_docs": [doc_name],
+            }
+
+    return {
+        "subjects": list(subjects_merged.values()),
+        "objects": list(objects_merged.values()),
+        "triplets": triplets,
+    }
+
+
+def resolve_entities_across_documents(
+    spo_by_chunk: dict,
+    llm_client,
+    verbose: bool = True,
+) -> dict:
+    """
+    LLM-based entity resolution: find subjects/objects that refer to the same
+    real-world entity across documents and normalize them to a canonical name.
+
+    For example:
+      - "Collins Aerospace smoke detector" and "Collins Aerospace" → keep both,
+        but the parent entity "Collins Aerospace" should also be connected to
+        documents that mention its products.
+      - "Passenger Experience Division, IndiGo Airlines" and "IndiGo Airlines"
+        → normalize to the more general form where appropriate.
+
+    This function rewrites spo_by_chunk IN PLACE with normalized entity names
+    so that deduplicate_spo_triplets will merge them into shared nodes.
+
+    Returns:
+        Updated spo_by_chunk dict with normalized entity names.
+    """
+    if verbose:
+        print("\n  [Entity Resolution] Resolving entities across documents...")
+
+    # Collect all unique subjects and objects with their source documents
+    all_subjects = {}
+    all_objects = {}
+    for chunk_id, spo in spo_by_chunk.items():
+        doc_name = chunk_id.split("::")[0] if "::" in chunk_id else chunk_id
+        subj = spo.get("subject", "").strip()
+        obj = spo.get("object", "").strip()
+        if subj:
+            all_subjects.setdefault(subj, []).append(doc_name)
+        if obj:
+            all_objects.setdefault(obj, []).append(doc_name)
+
+    # Build entity list for LLM
+    entity_list = []
+    for name, docs in all_subjects.items():
+        entity_list.append({"name": name, "role": "subject", "documents": list(set(docs))})
+    for name, docs in all_objects.items():
+        entity_list.append({"name": name, "role": "object", "documents": list(set(docs))})
+
+    if len(entity_list) < 3:
+        if verbose:
+            print("    Too few entities for resolution, skipping.")
+        return spo_by_chunk
+
+    prompt = f"""You are an entity resolution expert for IndiGo Airlines aviation maintenance documents.
+
+Below is a list of entity names extracted from multiple documents, along with which
+documents they appear in.
+
+TASK: Identify groups of entities that refer to the SAME real-world entity or concept
+(just named differently across documents). For each group, choose the best canonical
+name — prefer the shorter, more general form that people would commonly use.
+
+IMPORTANT RULES:
+- Only merge entities that truly refer to the same thing
+- "Collins Aerospace smoke detector" is a PRODUCT made by "Collins Aerospace" (the company).
+  These are different entities — do NOT merge them. But DO note the parent-child relationship.
+- When a specific product/part name contains a company name, the company itself should be
+  recognized as an entity mentioned in that document too.
+- If an entity is unique and has no matches, leave it as-is (do not include it in groups)
+
+Entities:
+{json.dumps(entity_list, indent=2)}
+
+Respond with a JSON object:
+{{
+  "merge_groups": [
+    {{
+      "canonical_name": "<best name to use>",
+      "canonical_type": "<entity type>",
+      "variants": ["<name1>", "<name2>", ...],
+      "reason": "<why these are the same entity>"
+    }}
+  ],
+  "implicit_mentions": [
+    {{
+      "parent_entity": "<company/org name that is implicitly mentioned>",
+      "parent_type": "<entity type>",
+      "because_of": "<the product/part name that implies this parent>",
+      "in_document": "<document name>"
+    }}
+  ]
+}}
+
+Return ONLY valid JSON. If no merges or implicit mentions are found, return
+{{"merge_groups": [], "implicit_mentions": []}}.
+"""
+
+    response = call_llm(llm_client, prompt)
+    parsed = parse_llm_json(response)
+
+    if not parsed or not isinstance(parsed, dict):
+        if verbose:
+            print("    WARN: Could not parse entity resolution response, skipping.")
+        return spo_by_chunk
+
+    # Apply merge groups — rename entities to canonical names
+    merge_map = {}  # old_name_lower → canonical_name
+    type_map = {}   # canonical_name_lower → canonical_type
+    merge_groups = parsed.get("merge_groups", [])
+    for group in merge_groups:
+        canonical = group.get("canonical_name", "").strip()
+        canonical_type = group.get("canonical_type", "unknown")
+        variants = group.get("variants", [])
+        if not canonical or not variants:
+            continue
+        type_map[canonical.lower()] = canonical_type
+        for variant in variants:
+            if variant.strip().lower() != canonical.lower():
+                merge_map[variant.strip().lower()] = canonical
+                if verbose:
+                    print(f"    Merge: \"{variant}\" → \"{canonical}\" ({group.get('reason', '')})")
+
+    # Apply implicit mentions — add synthetic SPO triplets for parent entities
+    implicit_mentions = parsed.get("implicit_mentions", [])
+    synthetic_count = 0
+    for mention in implicit_mentions:
+        parent = mention.get("parent_entity", "").strip()
+        parent_type = mention.get("parent_type", "unknown")
+        child = mention.get("because_of", "").strip()
+        doc = mention.get("in_document", "").strip()
+        if not parent or not doc:
+            continue
+
+        # Check if this parent is already a subject in a chunk from this document
+        already_present = False
+        for chunk_id, spo in spo_by_chunk.items():
+            chunk_doc = chunk_id.split("::")[0] if "::" in chunk_id else chunk_id
+            subj = spo.get("subject", "").strip()
+            if chunk_doc == doc and subj.lower() == parent.lower():
+                already_present = True
+                break
+
+        if not already_present:
+            # Find a chunk from this doc that mentions the child entity
+            target_chunk_id = None
+            for chunk_id, spo in spo_by_chunk.items():
+                chunk_doc = chunk_id.split("::")[0] if "::" in chunk_id else chunk_id
+                subj = spo.get("subject", "").strip()
+                obj = spo.get("object", "").strip()
+                if chunk_doc == doc and (child.lower() in subj.lower() or child.lower() in obj.lower()):
+                    target_chunk_id = chunk_id
+                    break
+
+            if target_chunk_id:
+                # Create a synthetic chunk ID for the implicit mention
+                synth_id = f"{doc}::implicit_{parent.lower().replace(' ', '_')}_{synthetic_count}"
+                spo_by_chunk[synth_id] = {
+                    "subject": parent,
+                    "subject_type": parent_type,
+                    "predicate": "is referenced through",
+                    "object": child,
+                    "object_type": spo_by_chunk[target_chunk_id].get("subject_type", "unknown"),
                 }
+                synthetic_count += 1
+                if verbose:
+                    print(f"    Implicit: \"{parent}\" added to {doc} (because of \"{child}\")")
 
-    return list(merged.values())
+    # Now apply merge_map to rename entities in spo_by_chunk
+    renamed_count = 0
+    for chunk_id, spo in spo_by_chunk.items():
+        subj = spo.get("subject", "").strip()
+        obj = spo.get("object", "").strip()
+
+        if subj.lower() in merge_map:
+            new_name = merge_map[subj.lower()]
+            spo["subject"] = new_name
+            if new_name.lower() in type_map:
+                spo["subject_type"] = type_map[new_name.lower()]
+            renamed_count += 1
+
+        if obj.lower() in merge_map:
+            new_name = merge_map[obj.lower()]
+            spo["object"] = new_name
+            if new_name.lower() in type_map:
+                spo["object_type"] = type_map[new_name.lower()]
+            renamed_count += 1
+
+    if verbose:
+        print(f"    Entity resolution complete: {len(merge_groups)} merge group(s), "
+              f"{renamed_count} rename(s), {synthetic_count} implicit mention(s) added.")
+
+    return spo_by_chunk
 
 
-def print_subjects(subjects_by_chunk: dict, deduped: list[dict]):
-    """Pretty-print extracted subjects."""
+def print_spo_triplets(spo_by_chunk: dict, deduped: dict):
+    """Pretty-print extracted SPO triplets."""
     print(f"\n{'=' * 70}")
-    print("  EXTRACTED SUBJECTS / ENTITIES")
+    print("  EXTRACTED SPO TRIPLETS")
     print(f"{'=' * 70}")
-    total_raw = sum(len(v) for v in subjects_by_chunk.values())
-    print(f"  Raw extractions: {total_raw} across {len(subjects_by_chunk)} chunks")
-    print(f"  Deduplicated: {len(deduped)} unique subjects\n")
-    for subj in sorted(deduped, key=lambda s: s["mention_count"], reverse=True):
-        print(f"  [{subj['type']:10s}] {subj['name']}")
-        print(f"              Mentions: {subj['mention_count']}  |  "
-              f"Documents: {', '.join(subj['mentioned_in_docs'])}")
-        if subj.get("description"):
-            print(f"              Context: {subj['description'][:100]}")
+    total_raw = len(spo_by_chunk)
+    subjects = deduped["subjects"]
+    objects = deduped["objects"]
+    triplets = deduped["triplets"]
+    print(f"  Triplets extracted: {total_raw} (one per chunk)")
+    print(f"  Unique subjects: {len(subjects)}")
+    print(f"  Unique objects: {len(objects)}")
+    print(f"\n  Triplets:")
+    for t in triplets:
+        print(f"    [{t['doc_name']:25s}] {t['subject']} —[{t['predicate']}]→ {t['object']}")
+    print(f"\n  Deduplicated Subjects:")
+    for subj in sorted(subjects, key=lambda s: s["mention_count"], reverse=True):
+        print(f"    [{subj['type']:10s}] {subj['name']} (mentions: {subj['mention_count']}, "
+              f"docs: {', '.join(subj['mentioned_in_docs'])})")
+    print(f"\n  Deduplicated Objects:")
+    for obj in sorted(objects, key=lambda o: o["mention_count"], reverse=True):
+        print(f"    [{obj['type']:10s}] {obj['name']} (mentions: {obj['mention_count']})")
     print(f"{'=' * 70}")
 
 
@@ -395,8 +640,8 @@ def print_subjects(subjects_by_chunk: dict, deduped: list[dict]):
 def build_lexical_graph(
     documents: list[dict],
     chunks: list[dict],
-    subjects_by_chunk: dict,
-    deduped_subjects: list[dict],
+    spo_by_chunk: dict,
+    deduped: dict,
     doc_summaries: dict,
     chunk_summaries: dict,
     driver=None,
@@ -404,11 +649,14 @@ def build_lexical_graph(
     """
     Build the Lexical Graph in Neo4j:
       - :Document nodes (one per file)
-      - :Subject nodes (deduplicated entities)
+      - :Subject nodes (deduplicated subjects from SPO triplets)
+      - :Object nodes (deduplicated objects from SPO triplets)
       - :Document -[:MENTIONS]-> :Subject
+      - :Subject -[:RELATES_TO {predicate}]-> :Object
 
     Note: Chunks are used internally for extraction and vector search
     but are NOT stored as nodes in the knowledge graph.
+    Each chunk contributes one SPO triplet.
     """
     if driver is None:
         driver = get_neo4j_driver()
@@ -418,9 +666,10 @@ def build_lexical_graph(
     run_cypher_write(driver, "MATCH (n:Document) DETACH DELETE n")
     run_cypher_write(driver, "MATCH (n:Chunk) DETACH DELETE n")  # clean up any legacy Chunk nodes
     run_cypher_write(driver, "MATCH (n:Subject) DETACH DELETE n")
+    run_cypher_write(driver, "MATCH (n:Object) DETACH DELETE n")
 
     # ── Create constraints ────────────────────────────────────────────────
-    for label, prop in [("Document", "name"), ("Subject", "name")]:
+    for label, prop in [("Document", "name"), ("Subject", "name"), ("Object", "name")]:
         try:
             run_cypher(
                 driver,
@@ -430,6 +679,10 @@ def build_lexical_graph(
             print(f"  Created constraint on {label}.{prop}")
         except Exception as e:
             print(f"  Constraint {label}.{prop} exists or skipped: {e}")
+
+    subjects = deduped["subjects"]
+    objects = deduped["objects"]
+    triplets = deduped["triplets"]
 
     # ── Insert Document nodes ─────────────────────────────────────────────
     print("\n  Inserting Document nodes...")
@@ -458,7 +711,12 @@ def build_lexical_graph(
 
     # ── Insert Subject nodes ──────────────────────────────────────────
     print("\n  Inserting Subject nodes...")
-    for subj in deduped_subjects:
+    for subj in subjects:
+        # Build description from SPO contexts
+        spo_desc = "; ".join(
+            f"{subj['name']} {ctx['predicate']} {ctx['object']}"
+            for ctx in subj.get("spo_contexts", [])[:3]
+        )[:500]
         run_cypher_write(
             driver,
             """
@@ -472,20 +730,43 @@ def build_lexical_graph(
             {
                 "name": subj["name"],
                 "type": subj["type"],
-                "description": subj.get("description", ""),
+                "description": spo_desc,
                 "mention_count": subj["mention_count"],
             },
         )
         print(f"    + Subject: {subj['name']} ({subj['type']})")
 
+    # ── Insert Object nodes ───────────────────────────────────────────
+    print("\n  Inserting Object nodes...")
+    for obj in objects:
+        run_cypher_write(
+            driver,
+            """
+            CREATE (o:Object {
+                name: $name,
+                type: $type,
+                mention_count: $mention_count
+            })
+            """,
+            {
+                "name": obj["name"],
+                "type": obj["type"],
+                "mention_count": obj["mention_count"],
+            },
+        )
+        print(f"    + Object: {obj['name']} ({obj['type']})")
+
     # ── Insert MENTIONS edges (Document → Subject) ────────────────────
-    #    Aggregate contexts from all chunks of each document per subject.
     print("\n  Inserting MENTIONS edges (Document → Subject)...")
-    for subj in deduped_subjects:
+    for subj in subjects:
         for doc_name in subj.get("mentioned_in_docs", []):
-            # Combine contexts from this document for this subject
-            contexts = subj.get("contexts_by_doc", {}).get(doc_name, [])
-            combined_context = "; ".join(c for c in contexts if c)[:500]
+            # Combine SPO contexts from this document for this subject
+            doc_spo_contexts = [
+                f"{ctx['predicate']} {ctx['object']}"
+                for ctx in subj.get("spo_contexts", [])
+                if ctx.get("doc_name") == doc_name
+            ]
+            combined_context = "; ".join(doc_spo_contexts)[:500]
 
             try:
                 run_cypher_write(
@@ -522,6 +803,50 @@ def build_lexical_graph(
                 except Exception as e:
                     print(f"    WARN: MENTIONS edge failed: {doc_name} → {subj['name']}: {e}")
 
+    # ── Insert RELATES_TO edges (Subject → Object) ───────────────────
+    print("\n  Inserting RELATES_TO edges (Subject → Object)...")
+    seen_edges = set()
+    for triplet in triplets:
+        edge_key = (triplet["subject"].lower(), triplet["predicate"].lower(), triplet["object"].lower())
+        if edge_key in seen_edges:
+            continue
+        seen_edges.add(edge_key)
+
+        try:
+            run_cypher_write(
+                driver,
+                """
+                MATCH (s:Subject {name: $subject_name})
+                MATCH (o:Object {name: $object_name})
+                CREATE (s)-[:RELATES_TO {predicate: $predicate}]->(o)
+                """,
+                {
+                    "subject_name": triplet["subject"],
+                    "object_name": triplet["object"],
+                    "predicate": triplet["predicate"],
+                },
+            )
+            print(f"    + {triplet['subject']} —[{triplet['predicate']}]→ {triplet['object']}")
+        except Exception:
+            # Case-insensitive fallback
+            try:
+                run_cypher_write(
+                    driver,
+                    """
+                    MATCH (s:Subject) WHERE toLower(s.name) = toLower($subject_name)
+                    MATCH (o:Object) WHERE toLower(o.name) = toLower($object_name)
+                    CREATE (s)-[:RELATES_TO {predicate: $predicate}]->(o)
+                    """,
+                    {
+                        "subject_name": triplet["subject"],
+                        "object_name": triplet["object"],
+                        "predicate": triplet["predicate"],
+                    },
+                )
+                print(f"    + {triplet['subject']} —[{triplet['predicate']}]→ {triplet['object']} (case-insensitive)")
+            except Exception as e:
+                print(f"    WARN: RELATES_TO edge failed: {triplet['subject']} → {triplet['object']}: {e}")
+
     print("\n  Lexical Graph built in Neo4j!")
     return driver
 
@@ -556,7 +881,7 @@ def query_lexical_graph(
     if driver is None:
         driver = get_neo4j_driver()
 
-    result = {"graph_results": {"subjects": [], "documents": []}, "vector_results": []}
+    result = {"graph_results": {"subjects": [], "documents": [], "spo_triplets": []}, "vector_results": []}
 
     # ── 1. Graph traversal (keyword CONTAINS) ─────────────────────────
     stop_words = {
@@ -590,6 +915,30 @@ def query_lexical_graph(
                 seen_subjects.add(rec["name"])
                 rec["matched_keyword"] = kw
                 result["graph_results"]["subjects"].append(rec)
+
+        # Search Objects (by name) — may lead to Subject via RELATES_TO
+        obj_records = run_cypher(
+            driver,
+            """
+            MATCH (s:Subject)-[r:RELATES_TO]->(o:Object)
+            WHERE toLower(o.name) CONTAINS $kw OR toLower(s.name) CONTAINS $kw
+            RETURN s.name AS subject, r.predicate AS predicate, o.name AS object
+            """,
+            {"kw": kw},
+        )
+        for rec in obj_records:
+            result["graph_results"]["spo_triplets"].append(rec)
+            # Also add the subject if not already seen
+            if rec["subject"] not in seen_subjects:
+                seen_subjects.add(rec["subject"])
+                subj_detail = run_cypher(driver, """
+                    MATCH (s:Subject {name: $name})
+                    RETURN s.name AS name, s.type AS type, s.description AS description,
+                           s.mention_count AS mention_count
+                """, {"name": rec["subject"]})
+                if subj_detail:
+                    subj_detail[0]["matched_keyword"] = kw
+                    result["graph_results"]["subjects"].append(subj_detail[0])
 
         # Search Documents (by summary)
         records = run_cypher(
@@ -669,6 +1018,11 @@ def print_query_results(question: str, results: dict):
             if s.get("description"):
                 print(f"               {s['description'][:80]}")
 
+    if gr.get("spo_triplets"):
+        print(f"\n  Graph — Matching SPO Triplets ({len(gr['spo_triplets'])}):")
+        for t in gr["spo_triplets"]:
+            print(f"    {t['subject']} —[{t['predicate']}]→ {t['object']}")
+
     if gr["documents"]:
         print(f"\n  Graph — Matching Documents ({len(gr['documents'])}):")
         for d in gr["documents"]:
@@ -721,6 +1075,16 @@ def visualize_lexical_graph(driver=None):
     for rec in records:
         print(f"    :Subject [{rec['type']:10s}] {rec['name']} (mentioned {rec['mentions']}x)")
 
+    # Objects
+    print("\n  Objects:")
+    records = run_cypher(driver, """
+        MATCH (o:Object)
+        RETURN o.name AS name, o.type AS type, o.mention_count AS mentions
+        ORDER BY o.mention_count DESC
+    """)
+    for rec in records:
+        print(f"    :Object  [{rec['type']:10s}] {rec['name']} (mentioned {rec['mentions']}x)")
+
     # Edges: MENTIONS (Document → Subject)
     print("\n  Edges (MENTIONS — Document → Subject):")
     records = run_cypher(driver, """
@@ -732,16 +1096,27 @@ def visualize_lexical_graph(driver=None):
         ctx = (rec.get("context") or "")[:50]
         print(f"    {rec['doc']} —[MENTIONS]→ {rec['subject']}  ({ctx})")
 
+    # Edges: RELATES_TO (Subject → Object)
+    print("\n  Edges (RELATES_TO — Subject → Object):")
+    records = run_cypher(driver, """
+        MATCH (s:Subject)-[r:RELATES_TO]->(o:Object)
+        RETURN s.name AS subject, r.predicate AS predicate, o.name AS object
+        ORDER BY s.name
+    """)
+    for rec in records:
+        print(f"    {rec['subject']} —[{rec['predicate']}]→ {rec['object']}")
+
     # Count summary
     print(f"\n  Summary:")
-    for label in ["Document", "Subject"]:
+    for label in ["Document", "Subject", "Object"]:
         count = run_cypher(driver, f"MATCH (n:{label}) RETURN count(n) AS c")[0]["c"]
         print(f"    {label} nodes: {count}")
-    edge_count = run_cypher(
-        driver,
-        "MATCH ()-[r:MENTIONS]->() RETURN count(r) AS c",
-    )[0]["c"]
-    print(f"    MENTIONS edges: {edge_count}")
+    for rel_type in ["MENTIONS", "RELATES_TO"]:
+        edge_count = run_cypher(
+            driver,
+            f"MATCH ()-[r:{rel_type}]->() RETURN count(r) AS c",
+        )[0]["c"]
+        print(f"    {rel_type} edges: {edge_count}")
 
     print(f"{'=' * 70}")
 
@@ -789,20 +1164,28 @@ def main():
     lance_db = init_lancedb()
     lance_table = store_chunks_in_vectordb(lance_db, embedding_client, all_chunks)
 
-    # Step 4: Extract subjects
+    # Step 4: Extract SPO triplets
     llm_client = get_llm_client()
     if args.advanced:
-        print("\n[Step 4] Extracting subjects with ReAct Agent (iterative exploration)...")
-        from lexical_graph.enrich_advanced import extract_subjects_advanced
-        subjects_by_chunk = extract_subjects_advanced(
+        print("\n[Step 4] Extracting SPO triplets with ReAct Agent (iterative exploration)...")
+        from lexical_graph.enrich_advanced import extract_spo_triplets_advanced
+        spo_by_chunk = extract_spo_triplets_advanced(
             all_chunks, llm_client, lance_table, embedding_client
         )
     else:
-        print("\n[Step 4] Extracting subjects with LLM (single-shot per chunk)...")
-        subjects_by_chunk = extract_subjects_simple(all_chunks, llm_client)
+        print("\n[Step 4] Extracting SPO triplets with LLM (single-shot per chunk)...")
+        spo_by_chunk = extract_spo_triplets_simple(all_chunks, llm_client)
 
-    deduped_subjects = deduplicate_subjects(subjects_by_chunk)
-    print_subjects(subjects_by_chunk, deduped_subjects)
+    deduped = deduplicate_spo_triplets(spo_by_chunk)
+    print_spo_triplets(spo_by_chunk, deduped)
+
+    # Step 4a: Entity resolution across documents
+    print("\n[Step 4a] Resolving entities across documents (LLM-based)...")
+    spo_by_chunk = resolve_entities_across_documents(spo_by_chunk, llm_client)
+
+    # Re-deduplicate after entity resolution
+    deduped = deduplicate_spo_triplets(spo_by_chunk)
+    print_spo_triplets(spo_by_chunk, deduped)
 
     # Generate summaries
     print("\n[Step 4b] Generating document summaries...")
@@ -817,10 +1200,10 @@ def main():
     chunk_summaries = {}
 
     # Step 5: Build graph
-    print("\n[Step 5] Building Lexical Graph in Neo4j (Document → Subject, no Chunk nodes)...")
+    print("\n[Step 5] Building Lexical Graph in Neo4j (Document → Subject → Object, no Chunk nodes)...")
     driver = get_neo4j_driver()
     build_lexical_graph(
-        documents, all_chunks, subjects_by_chunk, deduped_subjects,
+        documents, all_chunks, spo_by_chunk, deduped,
         doc_summaries, chunk_summaries, driver,
     )
 
@@ -844,7 +1227,7 @@ def main():
 
     driver.close()
     print("\nDone! View your Lexical Graph at http://localhost:7474")
-    print("Try: MATCH (d:Document)-[:MENTIONS]->(s:Subject) RETURN d, s")
+    print("Try: MATCH (d:Document)-[:MENTIONS]->(s:Subject)-[:RELATES_TO]->(o:Object) RETURN d, s, o")
 
 
 if __name__ == "__main__":

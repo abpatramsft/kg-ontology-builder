@@ -1,10 +1,10 @@
 """
-enrich_advanced.py — Advanced ReAct Agent-based Entity Extraction for Layer 2
+enrich_advanced.py — Advanced ReAct Agent-based SPO Triplet Extraction for Layer 2
 
-Instead of a single LLM call per chunk (lexical_graph.extract_subjects_simple),
+Instead of a single LLM call per chunk (lexical_graph.extract_spo_triplets_simple),
 this module uses a custom ReAct agent that iteratively explores the document
 landscape via a VectorDB query tool (LanceDB) to build richer, more accurate
-entity extractions with cross-chunk awareness.
+SPO triplet extractions with cross-chunk awareness.
 
 Architecture:
   ┌──────────────────────────────────────────────────────────────┐
@@ -22,12 +22,12 @@ LanceDB table of embedded document chunks: semantic search, chunk
 retrieval, metadata filtering, and collection stats.
 
 Usage:
-    from lexical_graph.enrich_advanced import extract_subjects_advanced
+    from lexical_graph.enrich_advanced import extract_spo_triplets_advanced
 
-    subjects_by_chunk = extract_subjects_advanced(
+    spo_by_chunk = extract_spo_triplets_advanced(
         chunks, llm_client, lance_table, embedding_client
     )
-    # Returns same dict format as lexical_graph.extract_subjects_simple
+    # Returns same dict format as lexical_graph.extract_spo_triplets_simple
 """
 
 import json
@@ -340,16 +340,16 @@ class LexicalEnrichmentAgent:
         )
 
         system = textwrap.dedent(f"""\
-        You are a senior NER / entity extraction agent analyzing IndiGo Airlines
+        You are a senior information extraction agent analyzing IndiGo Airlines
         maintenance and quality review documents.
 
-        Your task: Extract ALL named entities, technical components, and key concepts
+        Your task: Extract ONE SPO (Subject–Predicate–Object) triplet per chunk
         from the document "{self.doc_name}" using the document chunks stored in a
-        vector database.
+        vector database. Each triplet should capture the core meaning of a chunk.
 
         You work in a ReAct loop — you THINK, then ACT (use a tool to explore
         the document chunks), then OBSERVE the result, and repeat until you have
-        a comprehensive entity extraction.
+        a precise SPO triplet for every chunk.
 
         ── YOUR TOOL ──────────────────────────────────────────────────────────
         {self.tool.TOOL_DESCRIPTION}
@@ -369,39 +369,46 @@ class LexicalEnrichmentAgent:
         ACTION_INPUT: <valid JSON object for the tool>
 
         FORMAT B — Provide final answer:
-        THOUGHT: <your final reasoning about all entities found>
+        THOUGHT: <your final reasoning about the SPO triplets>
         FINAL_ANSWER:
         <valid JSON — see schema below>
 
         ── REQUIRED OUTPUT SCHEMA (for FINAL_ANSWER) ──────────────────────────
 
         {{
-          "<chunk_id>": [
-            {{
-              "name": "<entity name — specific, not generic>",
-              "type": "<one of: aircraft, assembly, part, supplier, person, event, metric, system, location>",
-              "context": "<10-20 word phrase explaining why this entity is mentioned>"
-            }}
-          ],
+          "<chunk_id>": {{
+            "subject": "<main entity — specific, not generic>",
+            "subject_type": "<one of: aircraft, assembly, part, supplier, person, event, metric, system, location>",
+            "predicate": "<relationship/action connecting subject to object>",
+            "object": "<target entity the subject relates to>",
+            "object_type": "<one of: aircraft, assembly, part, supplier, person, event, metric, system, location>"
+          }},
           ... (one key per chunk_id from: {chunk_ids})
         }}
 
         ── EXTRACTION RULES ───────────────────────────────────────────────────
 
-        - Extract specific product models, part numbers, supplier names, aircraft registrations
-        - Include technical systems and subsystems (e.g., "landing gear assembly", "FADEC controller")
-        - Include performance metrics and ratings if mentioned
-        - Do NOT include generic words — each entity should be a proper noun or specific technical term
-        - If an entity appears in multiple chunks, include it in EACH chunk where it appears
+        - Extract ONE SPO triplet per chunk that captures the chunk's core meaning
+        - Subject and object should be specific proper nouns or technical terms
+        - The predicate should be a concise verbal phrase (e.g., "shows performance degradation in",
+          "requires inspection of", "was supplied by")
+        - Together, the triplet should tell what the chunk is mainly about
+        - Use cross-chunk context to choose the most informative subject/object
         - Ground entity types in the IndiGo Airlines aviation domain
+        - IMPORTANT: Use CONSISTENT entity names across chunks and documents!
+          If "Collins Aerospace" appears in other documents, use that exact name
+          rather than "Collins Aerospace Systems" or "Collins Aerospace Inc."
+          The goal is to create shared entities that link documents together.
 
         ── STRATEGY ───────────────────────────────────────────────────────────
 
         1. Start by reading each chunk's full text (use get_chunk or get_chunks_by_doc)
-        2. Search for related chunks (search_similar) to understand cross-references
-        3. Build your entity list for each chunk
-        4. When confident, produce FINAL_ANSWER with entities keyed by chunk_id
-        5. Aim for 3-6 exploration steps.
+        2. CRITICAL: Use search_similar to find related chunks in OTHER documents!
+           Search for key entities (supplier names, aircraft models, systems) to see
+           how they appear in the broader corpus. This ensures consistent naming.
+        3. Determine the single best SPO triplet for each chunk
+        4. When confident, produce FINAL_ANSWER with one SPO per chunk_id
+        5. Aim for 4-8 exploration steps — at least 1-2 should be search_similar calls.
         """)
 
         self.messages.append({"role": "system", "content": system})
@@ -411,9 +418,11 @@ class LexicalEnrichmentAgent:
         Begin your analysis of the document "{self.doc_name}".
 
         Start by reading the full text of each chunk to understand the content.
-        Then use semantic search to find related context if needed.
+        Then IMPORTANT: use search_similar to search for key entities (like supplier
+        names, aircraft types, system names) across ALL documents in the vector DB.
+        This helps you use consistent entity names that match other documents.
 
-        Produce a comprehensive entity extraction for each chunk.
+        Produce ONE SPO (Subject–Predicate–Object) triplet per chunk.
         """)
         self.messages.append({"role": "user", "content": prompt})
 
@@ -530,29 +539,32 @@ class LexicalEnrichmentAgent:
         return None
 
     def _normalize_result(self, result: dict) -> dict:
-        """Ensure result has correct structure: {chunk_id: [entities]}."""
+        """Ensure result has correct structure: {chunk_id: {subject, subject_type, predicate, object, object_type}}."""
         chunk_ids = {c["chunk_id"] for c in self.target_chunks}
+        empty_spo = {
+            "subject": "", "subject_type": "unknown",
+            "predicate": "", "object": "", "object_type": "unknown",
+        }
         normalized = {}
 
-        for key, entities in result.items():
+        for key, spo in result.items():
             if key not in chunk_ids:
                 continue
-            if not isinstance(entities, list):
-                continue
-            clean_entities = []
-            for ent in entities:
-                if isinstance(ent, dict) and "name" in ent:
-                    clean_entities.append({
-                        "name": ent.get("name", "").strip(),
-                        "type": ent.get("type", "unknown"),
-                        "context": ent.get("context", ""),
-                    })
-            normalized[key] = clean_entities
+            if isinstance(spo, dict) and "subject" in spo and "object" in spo:
+                normalized[key] = {
+                    "subject": spo.get("subject", "").strip(),
+                    "subject_type": spo.get("subject_type", "unknown"),
+                    "predicate": spo.get("predicate", "").strip(),
+                    "object": spo.get("object", "").strip(),
+                    "object_type": spo.get("object_type", "unknown"),
+                }
+            else:
+                normalized[key] = dict(empty_spo)
 
         # Ensure all chunk_ids are present
         for cid in chunk_ids:
             if cid not in normalized:
-                normalized[cid] = []
+                normalized[cid] = dict(empty_spo)
 
         return normalized
 
@@ -577,7 +589,7 @@ class LexicalEnrichmentAgent:
 
             Respond with ONLY:
             FINAL_ANSWER:
-            <valid JSON with chunk_id keys mapping to entity arrays>
+            <valid JSON with one SPO triplet object per chunk_id>
             """),
         })
 
@@ -587,8 +599,12 @@ class LexicalEnrichmentAgent:
         if parsed["type"] == "final_answer":
             return parsed["result"]
 
-        # Absolute fallback
-        return {cid: [] for cid in chunk_ids}
+        # Absolute fallback — empty SPO triplets
+        empty_spo = {
+            "subject": "", "subject_type": "unknown",
+            "predicate": "", "object": "", "object_type": "unknown",
+        }
+        return {cid: dict(empty_spo) for cid in chunk_ids}
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -596,24 +612,28 @@ class LexicalEnrichmentAgent:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def validate_extraction(
-    subjects_by_chunk: dict,
+    spo_by_chunk: dict,
     all_chunks: list[dict],
     client: AzureOpenAI,
     verbose: bool = True,
 ) -> dict:
     """
-    Post-extraction validation: review all extracted entities across all chunks
-    for consistency, deduplication, and completeness.
+    Post-extraction validation: review all extracted SPO triplets across all chunks
+    for consistency, specificity, and completeness.
     """
     if verbose:
-        print("\n    [Validation] Cross-chunk entity consistency check...")
+        print("\n    [Validation] Cross-chunk SPO triplet consistency check...")
 
     # Build a summary of what was extracted
     extraction_summary = {}
-    for chunk_id, entities in subjects_by_chunk.items():
-        extraction_summary[chunk_id] = [
-            {"name": e["name"], "type": e["type"]} for e in entities
-        ]
+    for chunk_id, spo in spo_by_chunk.items():
+        extraction_summary[chunk_id] = {
+            "subject": spo.get("subject", ""),
+            "subject_type": spo.get("subject_type", ""),
+            "predicate": spo.get("predicate", ""),
+            "object": spo.get("object", ""),
+            "object_type": spo.get("object_type", ""),
+        }
 
     # Get chunk text previews for context
     chunk_previews = {}
@@ -621,29 +641,31 @@ def validate_extraction(
         chunk_previews[c["chunk_id"]] = c["text"][:200]
 
     prompt = textwrap.dedent(f"""\
-    You are a senior NER reviewer validating entity extractions from IndiGo Airlines
-    maintenance documents.
+    You are a senior reviewer validating SPO (Subject-Predicate-Object) triplet
+    extractions from IndiGo Airlines maintenance documents.
 
-    Below are the extracted entities per chunk, along with chunk text previews.
+    Below are the extracted SPO triplets per chunk, along with chunk text previews.
     Review for:
-    1. Missing entities: Are there obvious named entities in the text that were not extracted?
-    2. Duplicate entities: Are there entities with different names that refer to the same thing?
-       (e.g., "PW1100G" and "PW1100G engine" — should be normalized to one form)
-    3. Type accuracy: Are entity types correct? (e.g., "Pratt & Whitney" should be "supplier" not "part")
-    4. Spurious entities: Are there extractions that are too generic or not real entities?
+    1. Accuracy: Does each triplet capture the core meaning of its chunk?
+    2. Specificity: Are subjects and objects specific (proper nouns / technical terms),
+       not generic words?
+    3. Consistency: Are the same entities named consistently across chunks?
+       (e.g., "PW1100G" and "PW1100G engine" should be normalized to one form)
+    4. Type accuracy: Are entity types correct?
+       (e.g., "Pratt & Whitney" should be "supplier" not "part")
 
     Chunk previews:
     {json.dumps(chunk_previews, indent=2)}
 
-    Extracted entities:
+    Extracted SPO triplets:
     {json.dumps(extraction_summary, indent=2)}
 
     If the extraction is good, respond with EXACTLY:
     VALIDATED
 
     If you want to fix issues, respond with a corrected JSON object (same schema:
-    {{chunk_id: [{{name, type, context}}]}} for ALL chunks). Include ONLY the JSON,
-    no extra text.
+    {{chunk_id: {{subject, subject_type, predicate, object, object_type}}}} for ALL
+    chunks). Include ONLY the JSON, no extra text.
     """)
 
     completion = client.chat.completions.create(
@@ -655,38 +677,38 @@ def validate_extraction(
 
     if "VALIDATED" in response.upper() and len(response) < 50:
         if verbose:
-            print("    [Validation] Entities validated — no changes needed.")
-        return subjects_by_chunk
+            print("    [Validation] SPO triplets validated — no changes needed.")
+        return spo_by_chunk
 
     # Try to parse corrected JSON
     parsed = parse_llm_json(response)
     if parsed and isinstance(parsed, dict):
-        # Merge: for chunk_ids in the correction, use corrected version
-        corrected = dict(subjects_by_chunk)
+        corrected = dict(spo_by_chunk)
         changes = 0
-        for chunk_id, entities in parsed.items():
-            if chunk_id in corrected and isinstance(entities, list):
-                old_count = len(corrected[chunk_id])
-                corrected[chunk_id] = entities
-                new_count = len(entities)
-                if old_count != new_count:
-                    changes += 1
-                    if verbose:
-                        print(f"      ~ {chunk_id}: {old_count} → {new_count} entities")
+        for chunk_id, spo in parsed.items():
+            if chunk_id in corrected and isinstance(spo, dict) and "subject" in spo:
+                corrected[chunk_id] = {
+                    "subject": spo.get("subject", "").strip(),
+                    "subject_type": spo.get("subject_type", "unknown"),
+                    "predicate": spo.get("predicate", "").strip(),
+                    "object": spo.get("object", "").strip(),
+                    "object_type": spo.get("object_type", "unknown"),
+                }
+                changes += 1
         if verbose:
             print(f"    [Validation] Applied corrections to {changes} chunk(s).")
         return corrected
 
     if verbose:
         print("    [Validation] WARN: Could not parse correction, keeping original.")
-    return subjects_by_chunk
+    return spo_by_chunk
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  Public API — Drop-in replacement for lexical_graph.extract_subjects_simple
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def extract_subjects_advanced(
+def extract_spo_triplets_advanced(
     chunks: list[dict],
     llm_client: AzureOpenAI,
     lance_table: lancedb.table.Table,
@@ -695,13 +717,13 @@ def extract_subjects_advanced(
     validate: bool = True,
 ) -> dict:
     """
-    Advanced entity extraction using a ReAct agent per document.
+    Advanced SPO triplet extraction using a ReAct agent per document.
 
-    Same output contract as lexical_graph.extract_subjects_simple — returns
-    {chunk_id: [{"name", "type", "context"}, ...]}.
+    Same output contract as lexical_graph.extract_spo_triplets_simple — returns
+    {chunk_id: {"subject", "subject_type", "predicate", "object", "object_type"}}.
 
     The agent can explore the LanceDB table to find cross-references
-    and build richer entity extractions.
+    and build more accurate SPO triplets.
 
     Args:
         chunks:           List of chunk dicts (chunk_id, doc_name, text, index).
@@ -712,10 +734,11 @@ def extract_subjects_advanced(
         validate:         Run cross-document validation after extraction.
 
     Returns:
-        {chunk_id: [{"name": str, "type": str, "context": str}, ...]}
+        {chunk_id: {"subject": str, "subject_type": str, "predicate": str,
+                    "object": str, "object_type": str}}
     """
     tool = VectorDBQueryTool(lance_table, embedding_client)
-    subjects_by_chunk = {}
+    spo_by_chunk = {}
 
     # Group chunks by document
     docs = {}
@@ -724,7 +747,7 @@ def extract_subjects_advanced(
 
     for doc_name, doc_chunks in docs.items():
         if verbose:
-            print(f"\n    -- Agent extracting entities: {doc_name} "
+            print(f"\n    -- Agent extracting SPO triplets: {doc_name} "
                   f"({len(doc_chunks)} chunks) --")
 
         agent = LexicalEnrichmentAgent(
@@ -736,16 +759,16 @@ def extract_subjects_advanced(
         )
 
         result = agent.run()
-        subjects_by_chunk.update(result)
+        spo_by_chunk.update(result)
 
         if verbose:
-            total = sum(len(v) for v in result.values())
-            print(f"    Result: {total} entities across {len(result)} chunks")
+            filled = sum(1 for v in result.values() if v.get("subject"))
+            print(f"    Result: {filled}/{len(result)} chunks have SPO triplets")
 
     # Cross-document validation
     if validate:
-        subjects_by_chunk = validate_extraction(
-            subjects_by_chunk, chunks, llm_client, verbose
+        spo_by_chunk = validate_extraction(
+            spo_by_chunk, chunks, llm_client, verbose
         )
 
-    return subjects_by_chunk
+    return spo_by_chunk

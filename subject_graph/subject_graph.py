@@ -43,7 +43,8 @@ from utils.neo4j_helpers import get_neo4j_driver, run_cypher, run_cypher_write
 def fetch_subjects(driver=None) -> list[dict]:
     """
     Read all :Subject nodes from Neo4j, including their document context
-    via MENTIONS edges (Document → Subject).
+    via MENTIONS edges (Document → Subject) and SPO triplet context
+    via RELATES_TO edges (Subject → Object).
 
     Returns list of:
         {
@@ -51,7 +52,8 @@ def fetch_subjects(driver=None) -> list[dict]:
             "type": str,
             "description": str,
             "mention_count": int,
-            "doc_contexts": [{"doc_name": str, "topic_summary": str, "mention_context": str}]
+            "doc_contexts": [{"doc_name": str, "topic_summary": str, "mention_context": str}],
+            "spo_contexts": [{"predicate": str, "object_name": str, "object_type": str}]
         }
     """
     if driver is None:
@@ -75,6 +77,12 @@ def fetch_subjects(driver=None) -> list[dict]:
             ORDER BY d.name
         """, {"name": rec["name"]})
 
+        # Fetch SPO triplet contexts via RELATES_TO edges
+        spo_records = run_cypher(driver, """
+            MATCH (s:Subject {name: $name})-[r:RELATES_TO]->(o:Object)
+            RETURN r.predicate AS predicate, o.name AS object_name, o.type AS object_type
+        """, {"name": rec["name"]})
+
         subjects.append({
             "name": rec["name"],
             "type": rec["type"] or "unknown",
@@ -87,6 +95,14 @@ def fetch_subjects(driver=None) -> list[dict]:
                     "mention_context": d.get("context", ""),
                 }
                 for d in docs
+            ],
+            "spo_contexts": [
+                {
+                    "predicate": sr["predicate"],
+                    "object_name": sr["object_name"],
+                    "object_type": sr.get("object_type", ""),
+                }
+                for sr in spo_records
             ],
         })
 
@@ -203,23 +219,34 @@ def print_domain_entities(entities: list[dict]):
 def build_subject_text(subject: dict) -> str:
     """
     Build a rich text representation of a subject for embedding.
-    Combines the subject name, type, description, and document context.
+    Uses the full SPO triplet context (Subject → Predicate → Object).
+    Falls back to document mention context if no SPO data is available.
     """
     parts = [subject["name"]]
     if subject.get("type") and subject["type"] != "unknown":
         parts.append(f"(type: {subject['type']})")
-    if subject.get("description"):
-        parts.append(f"— {subject['description']}")
 
-    # Add document contexts for richer semantics
-    contexts = []
-    for dc in subject.get("doc_contexts", [])[:3]:  # limit to 3 contexts
-        if dc.get("mention_context"):
-            contexts.append(dc["mention_context"])
-        elif dc.get("topic_summary"):
-            contexts.append(dc["topic_summary"])
-    if contexts:
-        parts.append("| Context: " + "; ".join(contexts))
+    # Use SPO triplet contexts for richer semantics
+    spo_parts = []
+    for spo in subject.get("spo_contexts", [])[:3]:  # limit to 3 triplets
+        spo_parts.append(
+            f"{subject['name']} {spo['predicate']} {spo['object_name']}"
+        )
+    if spo_parts:
+        parts.append("| Triplets: " + "; ".join(spo_parts))
+
+    # Fall back to document mention contexts if no SPO triplets
+    if not spo_parts:
+        if subject.get("description"):
+            parts.append(f"— {subject['description']}")
+        contexts = []
+        for dc in subject.get("doc_contexts", [])[:3]:
+            if dc.get("mention_context"):
+                contexts.append(dc["mention_context"])
+            elif dc.get("topic_summary"):
+                contexts.append(dc["topic_summary"])
+        if contexts:
+            parts.append("| Context: " + "; ".join(contexts))
 
     return " ".join(parts)
 
@@ -848,13 +875,25 @@ def visualize_subject_graph(driver=None):
               f"{rec['subject']:25s} → {rec['table_name']}"
               f"  ({rec['confidence']})")
 
+    # ── SPO triplets (Subject → Object) ──────────────────────────────
+    print(f"\n  SPO Triplets (Subject → Object):")
+    records = run_cypher(driver, """
+        MATCH (s:Subject)-[r:RELATES_TO]->(o:Object)
+        RETURN s.name AS subject, r.predicate AS predicate, o.name AS object
+        ORDER BY s.name
+    """)
+    if not records:
+        print("    (no RELATES_TO edges found)")
+    for rec in records:
+        print(f"    {rec['subject']:25s} —[{rec['predicate']}]→ {rec['object']}")
+
     # ── Summary counts ────────────────────────────────────────────────
     print(f"\n  Summary:")
-    for label in ["DomainEntity", "Document", "Subject"]:
+    for label in ["DomainEntity", "Document", "Subject", "Object"]:
         count = run_cypher(driver, f"MATCH (n:{label}) RETURN count(n) AS c")[0]["c"]
         print(f"    {label} nodes: {count}")
 
-    for rel_type in ["HAS_FK", "MENTIONS", "CORRESPONDS_TO"]:
+    for rel_type in ["HAS_FK", "MENTIONS", "RELATES_TO", "CORRESPONDS_TO"]:
         count = run_cypher(
             driver,
             f"MATCH ()-[r:{rel_type}]->() RETURN count(r) AS c"
@@ -992,7 +1031,8 @@ def main():
     driver.close()
     print("\nDone! View the full graph at http://localhost:7474")
     print("Try: MATCH (d:Document)-[:MENTIONS]->(s:Subject)"
-          "-[:CORRESPONDS_TO]->(de:DomainEntity) RETURN d, s, de")
+          "-[:CORRESPONDS_TO]->(de:DomainEntity) RETURN d, s, de\n"
+          "     MATCH (s:Subject)-[r:RELATES_TO]->(o:Object) RETURN s, r, o")
 
 
 if __name__ == "__main__":

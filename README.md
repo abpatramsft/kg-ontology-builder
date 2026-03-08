@@ -9,21 +9,28 @@ A 3-layer Knowledge Graph (KG) ontology that acts as a **semantic layer** over s
 ## Architecture
 
 ```
-Unstructured Sources          Structured Sources
-       │                              │
-       ▼                              ▼
+Unstructured Sources          Structured Sources         Structured Sources
+       │                              │                         │
+       ▼                              ▼                         │
  [Lexical Graph]              [Domain Graph]          ← Layer 1 ✅
-       │                              ▲
-       │   MENTIONS                   │ CORRESPONDS_TO
-       ▼                              │
- [Subject Graph] ─────────────────────
+       │                              ▲                         │
+       │   MENTIONS                   │ CORRESPONDS_TO          │
+       ▼                              │                         │
+ [Subject Graph] ──────────────────────                         │
+                                                                │
+                    ┌───────────────────────────────────────────┘
+                    │
+              [Inference Agent]  ← Layer 4 ✅
+              graph_ontology_tool  │  vector_search_tool  │  sql_query_tool
+              (Neo4j KG)           │  (LanceDB)           │  (SQLite)
 ```
 
 | Layer | Source | What it captures | Status |
 |---|---|---|---|
 | **Layer 1 — Domain Graph** | SQLite DB | Schema semantics: table descriptions, domains, FK + semantic relationships | ✅ Complete |
-| **Layer 2 — Lexical Graph** | Text files | Document landscape: Document → Subject mapping + vector embeddings (chunks used internally only) | ✅ Complete |
+| **Layer 2 — Lexical Graph** | Text files | Document landscape: Document → Subject → Object (SPO triplets) + vector embeddings | ✅ Complete |
 | **Layer 3 — Subject Graph** | Cross-layer | Bridge: `CORRESPONDS_TO` edges linking unstructured subjects to structured entities | ✅ Complete |
+| **Inference Agent** | All layers | ReAct agent that navigates the KG + vector DB + SQL to answer questions | ✅ Complete |
 
 ---
 
@@ -59,8 +66,12 @@ KG_ontology_generation/
 │   ├── subject_graph.py            # Full pipeline: fetch → embed → resolve → build → query → visualize
 │   └── enrich_advanced.py          # ReAct agent with GraphQueryTool
 │
-├── kg_ontology_semantic_layer.md   # Design document (3-layer architecture)
-├── llm_test.py                     # Reference script for Azure OpenAI LLM calls
+├── agent_inference.py              # Inference Agent: ReAct agent with 3 tools (KG + Vector + SQL)
+├── test_inference.py               # Test harness: 3 built-in questions + custom query + trace saving
+├── app.py                          # Flask web UI with SSE streaming for real-time agent steps
+├── templates/
+│   └── index.html                  # Dark-themed web UI for the inference agent
+│
 ├── requirements.txt                # Python dependencies
 └── README.md                       # This file
 ```
@@ -169,10 +180,12 @@ python lexical_graph/lexical_graph.py --advanced
 1. **Load** — scans `data/` for `.txt` files
 2. **Chunk** — splits documents into sections using header/underline detection (fallback: paragraph splitting)
 3. **Embed & Store** — embeds all chunks via Azure OpenAI `text-embedding-3-small`, stores vectors + metadata in LanceDB
-4. **Extract Subjects** — LLM extracts named entities (aircraft, parts, suppliers, metrics, etc.) from each chunk
-5. **Summarize** — generates 1-2 sentence summaries for each document
-6. **Build Graph** — creates `:Document` and `:Subject` nodes with `:MENTIONS` edges in Neo4j (Chunk nodes are **not** stored in the graph — chunks are used internally for LLM context management and vector search only)
-7. **Query** — dual query interface: keyword graph traversal + vector similarity search via LanceDB
+4. **Extract SPO Triplets** — LLM extracts one **Subject-Predicate-Object** triplet per chunk (e.g., `Collins Aerospace smoke detector → reported_issue → false alarm during ground testing`)
+5. **Entity Resolution** — LLM-based cross-document entity resolution: identifies merge groups (same entity, different names) and implicit mentions (parent entity implied by product name), renames to canonical forms
+6. **Deduplicate** — merges SPO triplets by canonical subject name, accumulating multiple predicate-object contexts per subject
+7. **Summarize** — generates 1-2 sentence summaries for each document
+8. **Build Graph** — creates `:Document`, `:Subject`, and `:Object` nodes with `:MENTIONS` and `:RELATES_TO` edges in Neo4j (Chunk nodes are **not** stored in the graph — chunks are used internally for LLM context management and vector search only)
+9. **Query** — dual query interface: keyword graph traversal + vector similarity search via LanceDB
 
 #### Neo4j Schema (Layer 2):
 
@@ -180,22 +193,31 @@ python lexical_graph/lexical_graph.py --advanced
 (:Document {name, source_path, topic_summary})
     -[:MENTIONS {context}]->
 (:Subject {name, type, description, mention_count})
+    -[:RELATES_TO {predicate}]->
+(:Object {name})
 ```
+
+The SPO model captures **what** each subject does/has/causes, not just that it exists. A single Subject can fan out to multiple Object nodes via different predicates — e.g., `Collins Aerospace → supplies → smoke detectors` and `Collins Aerospace → reported_issue → false alarm`.
 
 #### Sample Cypher queries:
 
 ```cypher
--- Full Lexical Graph
-MATCH (d:Document)-[:MENTIONS]->(s:Subject) RETURN d, s
+-- Full Lexical Graph (Documents → Subjects → Objects)
+MATCH (d:Document)-[:MENTIONS]->(s:Subject)-[:RELATES_TO]->(o:Object) RETURN d, s, o
 
--- All subjects from a document
+-- All subjects from a document with their relations
 MATCH (d:Document {name: "quality_reviews.txt"})-[:MENTIONS]->(s:Subject)
-RETURN DISTINCT s.name, s.type, s.mention_count ORDER BY s.mention_count DESC
+OPTIONAL MATCH (s)-[r:RELATES_TO]->(o:Object)
+RETURN DISTINCT s.name, s.type, r.predicate, o.name ORDER BY s.mention_count DESC
 
 -- Cross-document entity overlap (subjects mentioned in both files)
 MATCH (d1:Document)-[:MENTIONS]->(s:Subject)<-[:MENTIONS]-(d2:Document)
 WHERE d1.name < d2.name
 RETURN s.name, s.type, d1.name, d2.name
+
+-- What does a specific subject relate to?
+MATCH (s:Subject {name: "Collins Aerospace"})-[r:RELATES_TO]->(o:Object)
+RETURN s.name, r.predicate, o.name
 
 -- Supplier entities across all documents
 MATCH (s:Subject {type: "supplier"}) RETURN s.name, s.mention_count ORDER BY s.mention_count DESC
@@ -233,7 +255,7 @@ python -m subject_graph.enrich_advanced
 
 #### What the pipeline does:
 
-1. **Fetch Subjects** — reads `:Subject` nodes from Neo4j (Layer 2), including document contexts via `:MENTIONS` edges
+1. **Fetch Subjects** — reads `:Subject` nodes from Neo4j (Layer 2), including document contexts via `:MENTIONS` edges and SPO triplet contexts via `:RELATES_TO` edges to `:Object` nodes
 2. **Fetch Domain Entities** — reads `:DomainEntity` nodes from Neo4j (Layer 1), including relationships and column metadata
 3. **Embed** — builds rich text representations of both sides, embeds via Azure OpenAI `text-embedding-3-small` (basic mode only)
 4. **Resolve Correspondences** — matches subjects to domain entities using cosine similarity + LLM confirmation (basic) or ReAct agent exploration (advanced)
@@ -322,19 +344,19 @@ A cross-table **validation checkpoint** runs after all tables are enriched, catc
 
 ### Layer 2 — Lexical Graph Modes
 
-#### Single-shot (`extract_subjects_simple`)
+#### Single-shot (`extract_spo_triplets_simple`)
 
-One LLM call per chunk. Sends the chunk text and asks for a JSON array of entities. Fast — each chunk is processed independently with no cross-chunk awareness.
+One LLM call per chunk. Sends the chunk text and asks for a single **Subject-Predicate-Object triplet**. Fast — each chunk is processed independently with no cross-chunk awareness.
 
-#### ReAct Agent (`extract_subjects_advanced`)
+#### ReAct Agent (`extract_spo_triplets_advanced`)
 
-A custom Reason-Act agent that iteratively explores the vector database to build richer, cross-chunk-aware entity extractions:
+A custom Reason-Act agent that iteratively explores the vector database to build richer, cross-document-aware SPO extractions:
 
 ```
 THOUGHT → ACTION (vector_db_query_tool) → OBSERVATION → repeat → FINAL_ANSWER
 ```
 
-The agent runs **one instance per document** (not per chunk), so it sees all chunks from a document and can discover cross-references. It has a single tool — `VectorDBQueryTool` — with 5 actions:
+The agent runs **one instance per document** (not per chunk), so it sees all chunks from a document and can discover cross-references. Its strategy **requires 1-2 `search_similar` calls** to find cross-document context before producing the final answer. It has a single tool — `VectorDBQueryTool` — with 5 actions:
 
 - `search_similar(query, n)` — semantic similarity search across all embedded chunks
 - `list_documents` — enumerate all document names in the vector store
@@ -345,12 +367,12 @@ The agent runs **one instance per document** (not per chunk), so it sees all chu
 **How the agent works step by step:**
 
 1. **Reads all chunks** — starts by calling `get_chunks_by_doc` to understand the full document
-2. **Semantic exploration** — runs `search_similar` queries for key topics mentioned in the text (e.g., "brake disc issues", "supplier performance") to find cross-chunk and cross-document references
+2. **Semantic exploration** — runs `search_similar` queries for key topics mentioned in the text (e.g., "brake disc issues", "supplier performance") to find **cross-document references** and ensure consistent entity naming
 3. **Deep-dives** — uses `get_chunk` to read the full text of related chunks it discovered
-4. **Builds entity map** — accumulates entities across iterations, with richer context from multiple chunks
-5. **Produces FINAL_ANSWER** — a JSON object keyed by chunk_id, with entities for each chunk
+4. **Builds SPO map** — accumulates one SPO triplet per chunk across iterations, with richer context from cross-document search
+5. **Produces FINAL_ANSWER** — a JSON object keyed by chunk_id, with one `{subject, predicate, object}` per chunk
 
-After all documents are processed, a **cross-document validation** step reviews the full extraction for consistency, deduplication, and completeness.
+After all documents are processed, **entity resolution** runs to merge equivalent entities across documents (e.g., "Collins Aerospace smoke detector" → "Collins Aerospace"), followed by a **cross-document validation** step.
 
 Typical agent run per document: **3-6 iterations** of tool use before producing a final answer.
 
@@ -359,9 +381,9 @@ Typical agent run per document: **3-6 iterations** of tool use before producing 
 | LLM calls per chunk | 1 | — |
 | LLM calls per document | N (one per chunk) | 5-8 (iterative exploration) |
 | Cross-chunk awareness | No | Yes (semantic search) |
-| Cross-document awareness | No | Yes (vector similarity) |
-| Post-extraction validation | No | Yes |
-| Entity context quality | Chunk-local | Multi-chunk grounded |
+| Cross-document awareness | No | Yes (vector similarity + entity resolution) |
+| Post-extraction validation | No | Yes (entity resolution + dedup) |
+| SPO context quality | Chunk-local | Multi-document grounded |
 
 ---
 
@@ -417,6 +439,68 @@ Typical agent run per entity: **3-5 iterations** of tool use before producing a 
 
 ---
 
+### Inference Agent
+
+The inference agent (`agent_inference.py`) is a ReAct agent that navigates the full 3-layer knowledge graph, LanceDB vector store, and SQLite database to answer natural language questions.
+
+```bash
+python agent_inference.py
+```
+
+#### Three tools:
+
+| Tool | Backend | Actions |
+|---|---|---|
+| **`graph_ontology_tool`** | Neo4j | `list_node_labels`, `list_relationship_types`, `list_domain_entities`, `list_subjects` (with SPO triplets), `list_documents`, `get_domain_entity_detail`, `get_subject_context` (with RELATES_TO), `get_correspondences`, `find_path`, `query_graph` |
+| **`vector_search_tool`** | LanceDB | `search(query, n)` — semantic similarity search across all embedded document chunks; `search_by_document(query, doc_name, n)` — filtered search within a specific document |
+| **`sql_query_tool`** | SQLite | `list_tables`, `describe_table`, `query(sql)` — read-only SQL access to the structured data |
+
+The agent combines evidence from all three sources in a single reasoning chain, producing a grounded final answer with citations.
+
+---
+
+### Web UI
+
+A Flask web app with **Server-Sent Events (SSE)** for real-time streaming of agent reasoning steps:
+
+```bash
+python app.py
+```
+
+- **URL:** http://localhost:5050
+- **Features:** Dark-themed UI, real-time step streaming (Thought → Action → Observation), question input box
+- Uses `StreamingInferenceAgent` — a subclass that pushes each agent step to a queue consumed by the SSE endpoint
+
+---
+
+### Testing
+
+A test harness for the inference agent with 3 built-in questions covering different source combinations:
+
+```bash
+# Run all 3 test questions
+python test_inference.py
+
+# Run a specific test question (1-3)
+python test_inference.py --question 2
+
+# Run a custom question
+python test_inference.py --custom "What suppliers provide parts for the A320neo?"
+
+# Save full agent trace to JSON
+python test_inference.py --save-trace
+```
+
+| Test # | Focus | Sources exercised |
+|---|---|---|
+| 1 | Ontology + SQL | graph_ontology_tool + sql_query_tool |
+| 2 | Ontology + Vector | graph_ontology_tool + vector_search_tool |
+| 3 | Cross-source bridging | All 3 tools |
+
+Traces are saved to `test_inference_results.json` when `--save-trace` is used.
+
+---
+
 ## Querying the Graph
 
 After building, explore in the **Neo4j Browser** at http://localhost:7474:
@@ -426,10 +510,12 @@ After building, explore in the **Neo4j Browser** at http://localhost:7474:
 MATCH (n:DomainEntity)-[r]->(m) RETURN n, r, m
 
 -- All Lexical Graph nodes and edges (Layer 2)
-MATCH (d:Document)-[r:MENTIONS]->(s:Subject) RETURN d, r, s
+MATCH (d:Document)-[r:MENTIONS]->(s:Subject)
+OPTIONAL MATCH (s)-[rt:RELATES_TO]->(o:Object)
+RETURN d, r, s, rt, o
 
 -- Both layers together
-MATCH (n) WHERE n:DomainEntity OR n:Document OR n:Subject
+MATCH (n) WHERE n:DomainEntity OR n:Document OR n:Subject OR n:Object
 OPTIONAL MATCH (n)-[r]-(m)
 RETURN n, r, m
 
@@ -463,13 +549,10 @@ RETURN path
 | Graph DB | Neo4j 5 Community (Docker) | Stores the KG ontology (all 3 layers) |
 | Vector DB | LanceDB (local, on-disk) | Chunk embeddings + similarity search (Layer 2) |
 | Structured DB | SQLite (stdlib) | Source data for Layer 1 |
-| LLM | Azure OpenAI GPT-4.1 | Schema enrichment + entity extraction |
+| LLM | Azure OpenAI GPT-4.1 | Schema enrichment + entity extraction + inference |
 | Embeddings | Azure OpenAI text-embedding-3-small | Chunk vectorization for Layer 2 |
+| Web Framework | Flask + SSE | Inference agent web UI with real-time streaming |
 | Auth | DefaultAzureCredential | Token-based, no API keys |
 | Python | 3.11+ | Runtime |
 
 ---
-
-## Design Document
-
-See [kg_ontology_semantic_layer.md](kg_ontology_semantic_layer.md) for the full architecture design, including the Lexical Graph (Layer 2) and Subject Graph (Layer 3) specs.

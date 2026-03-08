@@ -141,8 +141,11 @@ class GraphQueryTool:
     def _list_subjects(self) -> str:
         records = run_cypher(self.driver, """
             MATCH (s:Subject)
+            OPTIONAL MATCH (s)-[r:RELATES_TO]->(o:Object)
+            WITH s, collect({predicate: r.predicate, object: o.name, object_type: o.type}) AS spo_triplets
             RETURN s.name AS name, s.type AS type,
-                   s.description AS description, s.mention_count AS mention_count
+                   s.description AS description, s.mention_count AS mention_count,
+                   spo_triplets
             ORDER BY s.mention_count DESC
         """)
         return json.dumps({"subjects": records, "count": len(records)}, indent=2)
@@ -186,10 +189,17 @@ class GraphQueryTool:
             ORDER BY d.name
         """, {"name": subject["name"]})
 
+        # Get SPO triplets (RELATES_TO edges)
+        spo_records = run_cypher(self.driver, """
+            MATCH (s:Subject {name: $name})-[r:RELATES_TO]->(o:Object)
+            RETURN r.predicate AS predicate, o.name AS object_name, o.type AS object_type
+        """, {"name": subject["name"]})
+
         return json.dumps({
             "subject": subject,
             "mentioned_in_documents": docs,
             "total_documents": len(docs),
+            "spo_triplets": spo_records,
         }, indent=2)
 
     def _get_domain_entity_detail(self, name: str) -> str:
