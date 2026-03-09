@@ -31,3 +31,7 @@ Thumbs.db
 
 # LanceDB store (generated)
 data/lancedb_store/
+
+
+# Claude files
+.claude/
