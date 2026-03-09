@@ -5,9 +5,9 @@ Runs a set of sample questions through the InferenceAgent, printing every
 intermediate THOUGHT → ACTION → OBSERVATION step in a clear, readable format.
 
 Usage:
-    python test_inference.py                 # run all test questions
-    python test_inference.py --question 2    # run only question #2
-    python test_inference.py --custom "..."  # run a custom question
+    python src/test_inference.py                 # run all test questions
+    python src/test_inference.py --question 2    # run only question #2
+    python src/test_inference.py --custom "..."  # run a custom question
 """
 
 import json
@@ -17,8 +17,9 @@ import time
 import argparse
 from datetime import datetime
 
-# Ensure project root on sys.path
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+# Ensure src/ is on sys.path for package imports
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))       # src/
+PROJECT_ROOT = os.path.dirname(BASE_DIR)                    # repo root
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
 
@@ -155,7 +156,7 @@ def setup():
         sys.exit(1)
 
     # LanceDB
-    lance_db_path = os.path.join(BASE_DIR, "source_data", "lancedb_store")
+    lance_db_path = os.path.join(PROJECT_ROOT, "source_data", "lancedb_store")
     db = lancedb.connect(lance_db_path)
     try:
         lance_table = db.open_table("lexical_chunks")
@@ -172,7 +173,7 @@ def setup():
     print_connection_status("Azure OpenAI (Embeddings)", True, "text-embedding-3-small")
 
     # SQLite
-    db_path = os.path.join(BASE_DIR, "source_data", "airlines.db")
+    db_path = os.path.join(PROJECT_ROOT, "source_data", "airlines.db")
     if not os.path.exists(db_path):
         print_connection_status("SQLite", False, f"Not found: {db_path}")
         print("\n  ERROR: Run:  python source_data/setup_new_db.py")
@@ -279,7 +280,7 @@ def main():
 
     # ── Save trace if requested ────────────────────────────────────────
     if args.save_trace:
-        out_path = os.path.join(BASE_DIR, "test_inference_results.json")
+        out_path = os.path.join(PROJECT_ROOT, "test_inference_results.json")
         # Serialize results (strip observation to save space)
         serializable = []
         for r in results:

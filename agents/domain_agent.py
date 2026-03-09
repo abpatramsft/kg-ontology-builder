@@ -21,7 +21,7 @@ access to the SQLite database: list tables, describe schemas, sample rows,
 run arbitrary SELECT queries, and navigate FK chains.
 
 Usage:
-    from enrich_advanced import enrich_with_llm_advanced
+    from agents.domain_agent import enrich_with_llm_advanced
 
     enriched = enrich_with_llm_advanced(schema, client)
     # Returns same dict format as domain_graph.enrich_with_llm
@@ -756,7 +756,7 @@ def enrich_with_llm_advanced(
     """
     if db_path is None:
         base_dir = os.path.dirname(os.path.abspath(__file__))
-        project_root = os.path.dirname(base_dir)  # one level up from domain_graph/
+        project_root = os.path.dirname(base_dir)  # agents/ -> project root
         db_path = os.path.join(project_root, "source_data", "airlines.db")
 
     all_tables = list(schema.keys())
@@ -796,39 +796,3 @@ def enrich_with_llm_advanced(
 #  Standalone Test
 # ═══════════════════════════════════════════════════════════════════════════════
 
-if __name__ == "__main__":
-    """Run the advanced enrichment standalone for testing."""
-    from domain_graph import get_llm_client, introspect_sqlite, print_enrichment
-
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    project_root = os.path.dirname(base_dir)  # one level up from domain_graph/
-    db_path = os.path.join(project_root, "source_data", "airlines.db")
-
-    print("=" * 70)
-    print("  ADVANCED ENRICHMENT — ReAct Agent")
-    print("  Airlines Database Schema Enrichment")
-    print("=" * 70)
-
-    if not os.path.exists(db_path):
-        print(f"ERROR: Database not found at {db_path}")
-        print("Run 'python source_data/setup_new_db.py' first.")
-        exit(1)
-
-    print("\n[1] Introspecting schema...")
-    schema = introspect_sqlite(db_path)
-    print(f"    Found {len(schema)} table(s): {list(schema.keys())}")
-
-    print("\n[2] Creating LLM client...")
-    client = get_llm_client()
-
-    print("\n[3] Running ReAct agent enrichment...")
-    enriched = enrich_with_llm_advanced(schema, client, db_path=db_path)
-
-    print("\n[4] Final enrichment results:")
-    print_enrichment(enriched)
-
-    # Save trace to file for inspection
-    trace_path = os.path.join(project_root, "source_data", "enrichment_trace.json")
-    with open(trace_path, "w") as f:
-        json.dump(enriched, f, indent=2)
-    print(f"\n  Saved enrichment to {trace_path}")

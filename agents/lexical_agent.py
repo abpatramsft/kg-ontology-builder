@@ -22,7 +22,7 @@ LanceDB table of embedded document chunks: semantic search, chunk
 retrieval, metadata filtering, and collection stats.
 
 Usage:
-    from lexical_graph.enrich_advanced import extract_spo_triplets_advanced
+    from agents.lexical_agent import extract_spo_triplets_advanced
 
     spo_by_chunk = extract_spo_triplets_advanced(
         chunks, llm_client, lance_table, embedding_client
@@ -38,11 +38,12 @@ import textwrap
 
 from openai import AzureOpenAI
 
-# Ensure project root on sys.path
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(BASE_DIR)
-if PROJECT_ROOT not in sys.path:
-    sys.path.insert(0, PROJECT_ROOT)
+# Ensure src/ is on sys.path for utils imports
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))    # agents/
+PROJECT_ROOT = os.path.dirname(BASE_DIR)                  # project root
+SRC_DIR = os.path.join(PROJECT_ROOT, "src")
+if SRC_DIR not in sys.path:
+    sys.path.insert(0, SRC_DIR)
 
 from utils.llm import call_llm, parse_llm_json, embed_texts
 

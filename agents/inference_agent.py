@@ -34,7 +34,7 @@ Usage:
     # Opens an interactive REPL. Ask questions about IndiGo Airlines data.
 
     # Or programmatic usage:
-    from agent_inference import InferenceAgent, build_tools
+    from agents.inference_agent import InferenceAgent, build_tools
     tools = build_tools(neo4j_driver, lance_table, embedding_client, db_path)
     agent = InferenceAgent(llm_client, tools)
     answer = agent.run("Which suppliers provide parts for the A320neo landing gear?")
@@ -49,10 +49,12 @@ import textwrap
 
 from openai import AzureOpenAI
 
-# Ensure project root on sys.path
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-if BASE_DIR not in sys.path:
-    sys.path.insert(0, BASE_DIR)
+# Ensure src/ is on sys.path for utils imports
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))    # agents/
+PROJECT_ROOT = os.path.dirname(BASE_DIR)                  # project root
+SRC_DIR = os.path.join(PROJECT_ROOT, "src")
+if SRC_DIR not in sys.path:
+    sys.path.insert(0, SRC_DIR)
 
 from utils.llm import get_llm_client, get_embedding_client, embed_texts
 from utils.neo4j_helpers import get_neo4j_driver, run_cypher

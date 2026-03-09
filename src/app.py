@@ -5,7 +5,7 @@ Streams intermediate agent steps (THOUGHT → ACTION → OBSERVE) to the
 browser via Server-Sent Events so each step appears in real time.
 
 Usage:
-    python app.py          # starts on http://localhost:5050
+    python src/app.py          # starts on http://localhost:5050
 """
 
 import json
@@ -17,12 +17,15 @@ import threading
 
 from flask import Flask, render_template, request, Response, jsonify, stream_with_context
 
-# Ensure project root on sys.path
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+# Ensure src/ is on sys.path for package imports
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))       # src/
+PROJECT_ROOT = os.path.dirname(BASE_DIR)                    # repo root
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
 
-from agent_inference import (
+from agents.inference_agent import (
     InferenceAgent,
     GraphOntologyTool,
     VectorSearchTool,
@@ -182,7 +185,7 @@ def init_resources():
     print("  OK")
 
     print("[2/4] Connecting to LanceDB...")
-    lance_db_path = os.path.join(BASE_DIR, "source_data", "lancedb_store")
+    lance_db_path = os.path.join(PROJECT_ROOT, "source_data", "lancedb_store")
     db = lancedb.connect(lance_db_path)
     _lance_table = db.open_table("lexical_chunks")
     print(f"  OK ({len(_lance_table)} chunks)")
@@ -193,7 +196,7 @@ def init_resources():
     print("  OK")
 
     print("[4/4] SQLite database...")
-    _db_path = os.path.join(BASE_DIR, "source_data", "airlines.db")
+    _db_path = os.path.join(PROJECT_ROOT, "source_data", "airlines.db")
     assert os.path.exists(_db_path), f"DB not found: {_db_path}"
     print("  OK")
 
@@ -253,7 +256,7 @@ def ask():
 @app.route("/api/sample-trace")
 def sample_trace():
     """Return the saved test_inference_results.json if it exists."""
-    path = os.path.join(BASE_DIR, "test_inference_results.json")
+    path = os.path.join(PROJECT_ROOT, "test_inference_results.json")
     if os.path.exists(path):
         with open(path, "r", encoding="utf-8") as f:
             return jsonify(json.load(f))

@@ -11,7 +11,7 @@ Pipeline:
   4. Parse the model's JSON response and save to disk
 
 Usage:
-  python utils/pdf_extractor.py --pdf source_data_file/Invoice_1.pdf
+  python src/utils/pdf_extractor.py --pdf source_data_files/Invoice_1.pdf
   python utils/pdf_extractor.py --pdf invoice.pdf --output result.json
   python utils/pdf_extractor.py --help
 """

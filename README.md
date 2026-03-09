@@ -39,6 +39,13 @@ Unstructured Sources          Structured Sources         Structured Sources
 ```
 KG_ontology_generation/
 │
+├── agents/                          # ReAct agent classes and tools (one file per layer)
+│   ├── __init__.py
+│   ├── domain_agent.py              # Layer 1 agent: SQLDBQueryTool + EnrichmentAgent + enrich_with_llm_advanced
+│   ├── lexical_agent.py             # Layer 2 agent: VectorDBQueryTool + LexicalEnrichmentAgent + extract_spo_triplets_advanced
+│   ├── subject_agent.py             # Layer 3 agent: GraphQueryTool + ResolutionAgent + resolve_correspondences_advanced
+│   └── inference_agent.py           # Inference agent: GraphOntologyTool + VectorSearchTool + SQLQueryTool + InferenceAgent
+│
 ├── source_data_files/               # Raw source data (CSVs, text files, PDFs)
 │   ├── aircraft.csv                 # Aircraft fleet with registrations, models, capacity
 │   ├── airports.csv                 # Airport metadata (IATA/ICAO codes, coordinates)
@@ -62,32 +69,31 @@ KG_ontology_generation/
 │   ├── operational_report.txt       # Copied from source_data_files/ by setup script
 │   └── lancedb_store/               # LanceDB vector DB (auto-created by Layer 2)
 │
-├── utils/                           # Shared utilities (DRY)
+├── src/                             # Pipeline execution code
 │   ├── __init__.py
-│   ├── llm.py                       # Azure OpenAI LLM + embedding client helpers
-│   ├── neo4j_helpers.py             # Neo4j driver, Cypher read/write helpers
-│   └── pdf_extractor.py             # PDF → JSON extraction via Azure OpenAI GPT-4.1 vision
-│
-├── domain_graph/                   # Layer 1 — Domain Graph (structured data)
-│   ├── __init__.py
-│   ├── domain_graph.py             # Full pipeline: introspect → enrich → normalize concepts → build → query
-│   └── enrich_advanced.py          # ReAct agent with SQLDBQueryTool
-│
-├── lexical_graph/                  # Layer 2 — Lexical Graph (unstructured data)
-│   ├── __init__.py
-│   ├── lexical_graph.py            # Full pipeline: load → chunk → embed → extract → build → query
-│   └── enrich_advanced.py          # ReAct agent with VectorDBQueryTool
-│
-├── subject_graph/                  # Layer 3 — Subject Graph Bridge (cross-layer)
-│   ├── __init__.py
-│   ├── subject_graph.py            # Full pipeline: fetch → embed → resolve → build → query → visualize
-│   └── enrich_advanced.py          # ReAct agent with GraphQueryTool
-│
-├── agent_inference.py              # Inference Agent: ReAct agent with 3 tools (KG + Vector + SQL)
-├── test_inference.py               # Test harness: 3 built-in questions + custom query + trace saving
-├── app.py                          # Flask web UI with SSE streaming for real-time agent steps
-├── templates/
-│   └── index.html                  # Dark-themed web UI for the inference agent
+│   ├── test_inference.py            # Test harness: 3 built-in questions + custom query + trace saving
+│   ├── app.py                       # Flask web UI with SSE streaming for real-time agent steps
+│   │
+│   ├── utils/                       # Shared utilities (DRY)
+│   │   ├── __init__.py
+│   │   ├── llm.py                   # Azure OpenAI LLM + embedding client helpers
+│   │   ├── neo4j_helpers.py         # Neo4j driver, Cypher read/write helpers
+│   │   └── pdf_extractor.py         # PDF → JSON extraction via Azure OpenAI GPT-4.1 vision
+│   │
+│   ├── domain_graph/                # Layer 1 — Domain Graph (structured data)
+│   │   ├── __init__.py
+│   │   └── domain_graph.py          # Full pipeline: introspect → enrich → normalize concepts → build → query
+│   │
+│   ├── lexical_graph/               # Layer 2 — Lexical Graph (unstructured data)
+│   │   ├── __init__.py
+│   │   └── lexical_graph.py         # Full pipeline: load → chunk → embed → extract → build → query
+│   │
+│   ├── subject_graph/               # Layer 3 — Subject Graph Bridge (cross-layer)
+│   │   ├── __init__.py
+│   │   └── subject_graph.py         # Full pipeline: fetch → embed → resolve → build → query → visualize
+│   │
+│   └── templates/
+│       └── index.html               # Dark-themed web UI for the inference agent
 │
 ├── requirements.txt                # Python dependencies
 └── README.md                       # This file
@@ -176,17 +182,12 @@ Key FK chains:
 
 **Single-shot enrichment** (one LLM call per table):
 ```bash
-python domain_graph/domain_graph.py
+python src/domain_graph/domain_graph.py
 ```
 
 **ReAct agent enrichment** (iterative DB exploration per table):
 ```bash
-python domain_graph/domain_graph.py --advanced
-```
-
-**Standalone agent test:**
-```bash
-python domain_graph/enrich_advanced.py
+python src/domain_graph/domain_graph.py --advanced
 ```
 
 #### What the pipeline does:
@@ -248,12 +249,12 @@ OPTIONAL MATCH (n)-[r]-(m) RETURN n, r, m
 
 **Single-shot extraction** (one LLM call per chunk):
 ```bash
-python lexical_graph/lexical_graph.py
+python src/lexical_graph/lexical_graph.py
 ```
 
 **ReAct agent extraction** (iterative vector DB exploration per document):
 ```bash
-python lexical_graph/lexical_graph.py --advanced
+python src/lexical_graph/lexical_graph.py --advanced
 ```
 
 #### What the pipeline does:
@@ -314,28 +315,23 @@ MATCH (s:Subject {type: "supplier"}) RETURN s.name, s.mention_count ORDER BY s.m
 
 **Embedding similarity** (default, per-subject direction):
 ```bash
-python -m subject_graph.subject_graph
+python -m src.subject_graph.subject_graph
 ```
 
 **ReAct agent resolution** (iterative graph + vector exploration):
 ```bash
-python -m subject_graph.subject_graph --advanced
+python -m src.subject_graph.subject_graph --advanced
 ```
 
 **Per-domain-entity direction** (loop over tables instead of subjects):
 ```bash
-python -m subject_graph.subject_graph --direction domain_entity
-python -m subject_graph.subject_graph --advanced --direction domain_entity
+python -m src.subject_graph.subject_graph --direction domain_entity
+python -m src.subject_graph.subject_graph --advanced --direction domain_entity
 ```
 
 **Custom similarity threshold** (basic mode only, default 0.45):
 ```bash
-python -m subject_graph.subject_graph --threshold 0.55
-```
-
-**Standalone advanced agent test:**
-```bash
-python -m subject_graph.enrich_advanced
+python -m src.subject_graph.subject_graph --threshold 0.55
 ```
 
 #### What the pipeline does:
@@ -532,10 +528,10 @@ Typical agent run per entity: **3-5 iterations** of tool use before producing a 
 
 ### Inference Agent
 
-The inference agent (`agent_inference.py`) is a ReAct agent that navigates the full 3-layer knowledge graph, LanceDB vector store, and SQLite database to answer natural language questions.
+The inference agent (`agents/inference_agent.py`) is a ReAct agent that navigates the full 3-layer knowledge graph, LanceDB vector store, and SQLite database to answer natural language questions.
 
 ```bash
-python agent_inference.py
+python agents/inference_agent.py
 ```
 
 #### Three tools:
@@ -555,7 +551,7 @@ The agent combines evidence from all three sources in a single reasoning chain, 
 A Flask web app with **Server-Sent Events (SSE)** for real-time streaming of agent reasoning steps:
 
 ```bash
-python app.py
+python src/app.py
 ```
 
 - **URL:** http://localhost:5050
@@ -570,16 +566,16 @@ A test harness for the inference agent with 3 built-in questions covering differ
 
 ```bash
 # Run all 3 test questions
-python test_inference.py
+python src/test_inference.py
 
 # Run a specific test question (1-3)
-python test_inference.py --question 2
+python src/test_inference.py --question 2
 
 # Run a custom question
-python test_inference.py --custom "What suppliers provide parts for the A320neo?"
+python src/test_inference.py --custom "What suppliers provide parts for the A320neo?"
 
 # Save full agent trace to JSON
-python test_inference.py --save-trace
+python src/test_inference.py --save-trace
 ```
 
 | Test # | Focus | Sources exercised |

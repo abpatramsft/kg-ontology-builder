@@ -27,8 +27,8 @@ Prerequisites:
   - Azure OpenAI access for embeddings + LLM
 
 Usage:
-  python lexical_graph/lexical_graph.py              # simple mode
-  python lexical_graph/lexical_graph.py --advanced    # ReAct agent mode
+  python src/lexical_graph/lexical_graph.py              # simple mode
+  python src/lexical_graph/lexical_graph.py --advanced    # ReAct agent mode
 """
 
 import argparse
@@ -37,9 +37,12 @@ import os
 import re
 import sys
 
-# ─── Ensure project root is on sys.path ─────────────────────────────────────
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(BASE_DIR)
+# ─── Ensure src/ is on sys.path ─────────────────────────────────────────────
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))      # src/lexical_graph/
+SRC_DIR = os.path.dirname(BASE_DIR)                         # src/
+PROJECT_ROOT = os.path.dirname(SRC_DIR)                     # repo root
+if SRC_DIR not in sys.path:
+    sys.path.insert(0, SRC_DIR)
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
@@ -1169,7 +1172,7 @@ def main():
     llm_client = get_llm_client()
     if args.advanced:
         print("\n[Step 4] Extracting SPO triplets with ReAct Agent (iterative exploration)...")
-        from lexical_graph.enrich_advanced import extract_spo_triplets_advanced
+        from agents.lexical_agent import extract_spo_triplets_advanced
         spo_by_chunk = extract_spo_triplets_advanced(
             all_chunks, llm_client, lance_table, embedding_client
         )

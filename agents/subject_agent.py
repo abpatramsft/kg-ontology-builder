@@ -22,7 +22,7 @@ Neo4j knowledge graph (DomainEntity, Document, Subject nodes) and
 optionally LanceDB for semantic search across document chunks.
 
 Usage:
-    from subject_graph.enrich_advanced import resolve_correspondences_advanced
+    from agents.subject_agent import resolve_correspondences_advanced
 
     correspondences = resolve_correspondences_advanced(
         subjects, domain_entities, llm_client, driver,
@@ -39,11 +39,12 @@ import textwrap
 
 from openai import AzureOpenAI
 
-# Ensure project root on sys.path
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(BASE_DIR)
-if PROJECT_ROOT not in sys.path:
-    sys.path.insert(0, PROJECT_ROOT)
+# Ensure src/ is on sys.path for utils imports
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))    # agents/
+PROJECT_ROOT = os.path.dirname(BASE_DIR)                  # project root
+SRC_DIR = os.path.join(PROJECT_ROOT, "src")
+if SRC_DIR not in sys.path:
+    sys.path.insert(0, SRC_DIR)
 
 from utils.llm import call_llm, parse_llm_json, embed_texts
 from utils.neo4j_helpers import run_cypher
@@ -1187,66 +1188,3 @@ def resolve_correspondences_advanced(
 #  Standalone Test
 # ═══════════════════════════════════════════════════════════════════════════════
 
-if __name__ == "__main__":
-    """Run the advanced entity resolution standalone for testing."""
-    from subject_graph.subject_graph import (
-        fetch_subjects, fetch_domain_entities,
-        print_subjects, print_domain_entities, print_correspondences,
-    )
-    from utils.llm import get_llm_client, get_embedding_client
-    from utils.neo4j_helpers import get_neo4j_driver
-
-    print("=" * 70)
-    print("  ADVANCED ENTITY RESOLUTION — ReAct Agent")
-    print("  Airlines: Subject → DomainEntity Bridge")
-    print("=" * 70)
-
-    print("\n[1] Connecting to Neo4j...")
-    driver = get_neo4j_driver()
-
-    print("\n[2] Fetching subjects (Layer 2)...")
-    subjects = fetch_subjects(driver)
-    print(f"    Found {len(subjects)} subject(s)")
-    print_subjects(subjects)
-
-    print("\n[3] Fetching domain entities (Layer 1)...")
-    domain_entities = fetch_domain_entities(driver)
-    print(f"    Found {len(domain_entities)} domain entity/entities")
-    print_domain_entities(domain_entities)
-
-    if not subjects or not domain_entities:
-        print("ERROR: Need both Layer 1 and Layer 2 to be built first.")
-        driver.close()
-        exit(1)
-
-    print("\n[4] Creating LLM client...")
-    llm_client = get_llm_client()
-
-    # Optionally open LanceDB
-    lance_table = None
-    embedding_client = None
-    try:
-        import lancedb
-        lance_db = lancedb.connect(os.path.join(PROJECT_ROOT, "source_data", "lancedb_store"))
-        lance_table = lance_db.open_table("lexical_chunks")
-        embedding_client = get_embedding_client()
-        print("    LanceDB connected — vector search available")
-    except Exception as e:
-        print(f"    LanceDB not available: {e} — agent will use graph queries only")
-
-    print("\n[5] Running ReAct agent resolution...")
-    correspondences = resolve_correspondences_advanced(
-        subjects, domain_entities, llm_client, driver,
-        lance_table=lance_table, embedding_client=embedding_client,
-    )
-
-    print("\n[6] Results:")
-    print_correspondences(correspondences)
-
-    # Save results
-    trace_path = os.path.join(PROJECT_ROOT, "source_data", "correspondence_trace.json")
-    with open(trace_path, "w") as f:
-        json.dump(correspondences, f, indent=2)
-    print(f"\n  Saved correspondences to {trace_path}")
-
-    driver.close()

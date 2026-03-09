@@ -30,9 +30,12 @@ import sys
 
 from openai import AzureOpenAI
 
-# ─── Ensure project root is on sys.path for utils imports ────────────────────
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(BASE_DIR)  # one level up from domain_graph/
+# ─── Ensure src/ is on sys.path for utils imports ────────────────────────────
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))      # src/domain_graph/
+SRC_DIR = os.path.dirname(BASE_DIR)                         # src/
+PROJECT_ROOT = os.path.dirname(SRC_DIR)                     # repo root
+if SRC_DIR not in sys.path:
+    sys.path.insert(0, SRC_DIR)
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
@@ -978,7 +981,7 @@ def main():
     client = get_llm_client()
     if args.advanced:
         print("\n[Step 2] Enriching with ReAct Agent (iterative exploration)...")
-        from enrich_advanced import enrich_with_llm_advanced
+        from agents.domain_agent import enrich_with_llm_advanced
         enriched = enrich_with_llm_advanced(schema, client, db_path=DB_PATH)
     else:
         print("\n[Step 2] Enriching with LLM (GPT-4.1, single-shot)...")

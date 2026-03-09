@@ -16,8 +16,8 @@ Prerequisites:
   - LanceDB store with embedded chunks (for advanced mode).
 
 Usage:
-  python subject_graph/subject_graph.py              # simple mode (embedding similarity)
-  python subject_graph/subject_graph.py --advanced    # ReAct agent mode
+  python src/subject_graph/subject_graph.py              # simple mode (embedding similarity)
+  python src/subject_graph/subject_graph.py --advanced    # ReAct agent mode
 """
 
 import argparse
@@ -26,9 +26,12 @@ import math
 import os
 import sys
 
-# ─── Ensure project root is on sys.path ─────────────────────────────────────
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-PROJECT_ROOT = os.path.dirname(BASE_DIR)
+# ─── Ensure src/ is on sys.path ─────────────────────────────────────────────
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))      # src/subject_graph/
+SRC_DIR = os.path.dirname(BASE_DIR)                         # src/
+PROJECT_ROOT = os.path.dirname(SRC_DIR)                     # repo root
+if SRC_DIR not in sys.path:
+    sys.path.insert(0, SRC_DIR)
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
@@ -990,7 +993,7 @@ def main():
 
     if args.advanced:
         print("\n[Step 3] Resolving correspondences with ReAct Agent (iterative exploration)...")
-        from subject_graph.enrich_advanced import resolve_correspondences_advanced
+        from agents.subject_agent import resolve_correspondences_advanced
 
         # Open LanceDB for the agent's vector search tool
         import lancedb
