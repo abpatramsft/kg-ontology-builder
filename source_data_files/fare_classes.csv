@@ -1,0 +1,6 @@
+fare_class_id,fare_class_code,fare_class_name,base_price_factor,flexibility,changes_fee_inr,cancellation_fee_inr,baggage_allowance_kg,meal_included,seat_selection,priority_boarding,lounge_access
+FC001,SS,SuperSaver,1.0,Non-Refundable,3500,Full Fare Forfeited,15,No,Paid,No,No
+FC002,FL,Flexi,1.35,Refundable,1500,1500,20,No,Included,Yes,No
+FC003,BP,Business Plus,3.2,Fully Flexible,0,0,30,Yes,Included-Premium,Yes,Yes
+FC004,CB,Corporate Flexi,1.5,Refundable,1000,1000,25,No,Included,Yes,No
+FC005,EA,Early Bird,0.85,Non-Refundable,4000,Full Fare Forfeited,15,No,Paid,No,No

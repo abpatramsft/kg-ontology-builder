@@ -1,0 +1,59 @@
+IndiGo Airlines — Aircraft Maintenance & Incident Summary (Jan 2024)
+=====================================================================
+
+Prepared by: Engineering & Maintenance Division, IndiGo Airlines
+Report Month: January 2024
+Classification: Internal Use Only
+
+Fleet Maintenance Overview
+---------------------------
+
+A total of 20 maintenance events were logged across the IndiGo fleet during January 2024.
+The most significant activity was a C-Check on aircraft AC011 (registration VT-INK, Airbus
+A320-200 variant) conducted at the Air India Engineering facility at DEL. The inspection,
+tagged as maintenance record M001, ran from January 10 to January 25 with an estimated cost
+of INR 45,00,000. During the inspection, a crack was found in the nose gear door bracket,
+requiring immediate repair. The aircraft was returned to active status by January 28.
+
+Aircraft AC015 (VT-INO, ATR 72-600) underwent a scheduled A-Check (M005) at IndiGo
+Hangar-HYD from January 12 to January 14. The inspection cost INR 3,50,000 and revealed
+worn brake pads requiring replacement. The next scheduled maintenance for this aircraft
+falls on April 14, 2024. The ATR fleet based at smaller airports like Rajiv Gandhi
+International (A005, HYD) continues to show lower maintenance costs compared to the
+narrow-body Airbus fleet, averaging INR 4,20,000 per event versus INR 28,00,000.
+
+Engine-related maintenance was performed on AC003 (VT-INC, A321neo) under maintenance
+record M003 — a hot section inspection at Pratt & Whitney MRO-SIN facility. Technician
+TEC003 supervised the work, which ran from January 5 to January 20 at a cost of INR
+65,00,000. No critical findings were reported, and the aircraft is next due for inspection
+on July 20, 2024.
+
+Incident Report Summary
+-------------------------
+
+Fifteen incidents were recorded in January 2024 across the operational fleet. The majority
+were classified as Low severity, reflecting the airline's strong safety culture.
+
+Incident I001 involved flight F003 on aircraft AC003 on January 15. An ATC slot delay at
+DEL resulted in a 30-minute departure delay during the ground phase. The incident was
+classified Low severity, closed without DGCA reporting, and attributed to airspace
+congestion over northern India — a recurring issue during peak morning departure banks
+at Indira Gandhi International Airport.
+
+Incident I003, also on January 15, was a Medium-severity bird strike on aircraft AC005
+(VT-INE) during the approach phase of flight F005. The bird struck the radome area, and
+a post-flight inspection revealed minor composite damage. The aircraft was grounded for
+a 2-day inspection before being cleared for service. This incident was reported to DGCA
+as required under CAR Section 5, Series F, Part I.
+
+The most operationally significant incident was I005 — a hydraulic leak warning on aircraft
+AC010 (VT-INJ, A320-200) during cruise phase on flight F010 from DEL to GOI via route R005.
+The crew executed the hydraulic system abnormal checklist, and the aircraft landed normally
+at Goa (Dabolim Airport, A006, GOI). Maintenance found a faulty hydraulic line connector,
+which was replaced on-station. The incident was classified Medium severity and reported to
+DGCA. Aircraft AC010 returned to service within 48 hours after hydraulic system pressure
+tests confirmed nominal performance.
+
+No High-severity incidents were recorded during the month. The airline's incident rate of
+0.5 per 1,000 flight hours remains well below the industry average of 1.2 per 1,000 hours
+for carriers of comparable fleet size operating in the South Asian region.

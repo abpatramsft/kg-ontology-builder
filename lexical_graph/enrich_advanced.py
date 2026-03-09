@@ -340,8 +340,8 @@ class LexicalEnrichmentAgent:
         )
 
         system = textwrap.dedent(f"""\
-        You are a senior information extraction agent analyzing IndiGo Airlines
-        maintenance and quality review documents.
+        You are a senior information extraction agent analyzing airlines and aviation
+        industry documents.
 
         Your task: Extract ONE SPO (Subject–Predicate–Object) triplet per chunk
         from the document "{self.doc_name}" using the document chunks stored in a
@@ -378,10 +378,10 @@ class LexicalEnrichmentAgent:
         {{
           "<chunk_id>": {{
             "subject": "<main entity — specific, not generic>",
-            "subject_type": "<one of: aircraft, assembly, part, supplier, person, event, metric, system, location>",
+            "subject_type": "<one of: aircraft, flight, route, airport, crew, passenger, booking, fare_class, maintenance, incident, organization, person, event, metric, system, location, equipment, service>",
             "predicate": "<relationship/action connecting subject to object>",
             "object": "<target entity the subject relates to>",
-            "object_type": "<one of: aircraft, assembly, part, supplier, person, event, metric, system, location>"
+            "object_type": "<one of: aircraft, flight, route, airport, crew, passenger, booking, fare_class, maintenance, incident, organization, person, event, metric, system, location, equipment, service>"
           }},
           ... (one key per chunk_id from: {chunk_ids})
         }}
@@ -394,17 +394,17 @@ class LexicalEnrichmentAgent:
           "requires inspection of", "was supplied by")
         - Together, the triplet should tell what the chunk is mainly about
         - Use cross-chunk context to choose the most informative subject/object
-        - Ground entity types in the IndiGo Airlines aviation domain
+        - Ground entity types in the airlines and aviation domain
         - IMPORTANT: Use CONSISTENT entity names across chunks and documents!
-          If "Collins Aerospace" appears in other documents, use that exact name
-          rather than "Collins Aerospace Systems" or "Collins Aerospace Inc."
+          If an entity appears in other documents, use that exact name
+          rather than abbreviations or alternate forms.
           The goal is to create shared entities that link documents together.
 
         ── STRATEGY ───────────────────────────────────────────────────────────
 
         1. Start by reading each chunk's full text (use get_chunk or get_chunks_by_doc)
         2. CRITICAL: Use search_similar to find related chunks in OTHER documents!
-           Search for key entities (supplier names, aircraft models, systems) to see
+           Search for key entities (airline names, aircraft models, airports, routes) to see
            how they appear in the broader corpus. This ensures consistent naming.
         3. Determine the single best SPO triplet for each chunk
         4. When confident, produce FINAL_ANSWER with one SPO per chunk_id
@@ -418,9 +418,10 @@ class LexicalEnrichmentAgent:
         Begin your analysis of the document "{self.doc_name}".
 
         Start by reading the full text of each chunk to understand the content.
-        Then IMPORTANT: use search_similar to search for key entities (like supplier
-        names, aircraft types, system names) across ALL documents in the vector DB.
-        This helps you use consistent entity names that match other documents.
+        Then IMPORTANT: use search_similar to search for key entities (like airline
+        names, aircraft types, airports, routes, crew, incidents) across ALL documents
+        in the vector DB. This helps you use consistent entity names that match
+        other documents.
 
         Produce ONE SPO (Subject–Predicate–Object) triplet per chunk.
         """)
@@ -642,7 +643,7 @@ def validate_extraction(
 
     prompt = textwrap.dedent(f"""\
     You are a senior reviewer validating SPO (Subject-Predicate-Object) triplet
-    extractions from IndiGo Airlines maintenance documents.
+    extractions from airlines and aviation industry documents.
 
     Below are the extracted SPO triplets per chunk, along with chunk text previews.
     Review for:
@@ -650,9 +651,9 @@ def validate_extraction(
     2. Specificity: Are subjects and objects specific (proper nouns / technical terms),
        not generic words?
     3. Consistency: Are the same entities named consistently across chunks?
-       (e.g., "PW1100G" and "PW1100G engine" should be normalized to one form)
+       (e.g., "Boeing 737" and "B737" should be normalized to one form)
     4. Type accuracy: Are entity types correct?
-       (e.g., "Pratt & Whitney" should be "supplier" not "part")
+       (e.g., an airline name should be "organization" not "person")
 
     Chunk previews:
     {json.dumps(chunk_previews, indent=2)}

@@ -155,7 +155,7 @@ def setup():
         sys.exit(1)
 
     # LanceDB
-    lance_db_path = os.path.join(BASE_DIR, "data", "lancedb_store")
+    lance_db_path = os.path.join(BASE_DIR, "source_data", "lancedb_store")
     db = lancedb.connect(lance_db_path)
     try:
         lance_table = db.open_table("lexical_chunks")
@@ -172,10 +172,10 @@ def setup():
     print_connection_status("Azure OpenAI (Embeddings)", True, "text-embedding-3-small")
 
     # SQLite
-    db_path = os.path.join(BASE_DIR, "data", "manufacturing.db")
+    db_path = os.path.join(BASE_DIR, "source_data", "airlines.db")
     if not os.path.exists(db_path):
         print_connection_status("SQLite", False, f"Not found: {db_path}")
-        print("\n  ERROR: Run:  python data/setup_db.py")
+        print("\n  ERROR: Run:  python source_data/setup_new_db.py")
         sys.exit(1)
     print_connection_status("SQLite", True, db_path)
 

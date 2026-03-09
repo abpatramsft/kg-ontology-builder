@@ -1,0 +1,41 @@
+assignment_id,flight_id,crew_id,role_on_flight,is_commander
+CA001,F001,CR001,Pilot-in-Command,Yes
+CA002,F001,CR003,First Officer,No
+CA003,F001,CR011,Cabin Crew Chief,No
+CA004,F001,CR014,Cabin Crew,No
+CA005,F002,CR002,Pilot-in-Command,Yes
+CA006,F002,CR006,First Officer,No
+CA007,F002,CR012,Senior Cabin Crew,No
+CA008,F002,CR016,Cabin Crew,No
+CA009,F003,CR021,Pilot-in-Command,Yes
+CA010,F003,CR008,First Officer,No
+CA011,F003,CR020,Senior Cabin Crew,No
+CA012,F003,CR015,Cabin Crew,No
+CA013,F003,CR017,Cabin Crew,No
+CA014,F004,CR009,Training Captain,Yes
+CA015,F004,CR004,First Officer,No
+CA016,F004,CR011,Cabin Crew Chief,No
+CA017,F005,CR007,Pilot-in-Command,Yes
+CA018,F005,CR010,First Officer,No
+CA019,F005,CR012,Senior Cabin Crew,No
+CA020,F005,CR018,Cabin Crew,No
+CA021,F005,CR019,Cabin Crew,No
+CA022,F006,CR023,Pilot-in-Command,Yes
+CA023,F006,CR024,First Officer,No
+CA024,F006,CR025,Cabin Crew Chief,No
+CA025,F006,CR013,Senior Cabin Crew,No
+CA026,F006,CR016,Cabin Crew,No
+CA027,F007,CR005,Pilot-in-Command,Yes
+CA028,F007,CR004,First Officer,No
+CA029,F007,CR020,Senior Cabin Crew,No
+CA030,F007,CR014,Cabin Crew,No
+CA031,F019,CR001,Pilot-in-Command,Yes
+CA032,F019,CR003,First Officer,No
+CA033,F019,CR011,Cabin Crew Chief,No
+CA034,F019,CR012,Senior Cabin Crew,No
+CA035,F019,CR015,Cabin Crew,No
+CA036,F019,CR017,Cabin Crew,No
+CA037,F025,CR021,Pilot-in-Command,Yes
+CA038,F025,CR008,First Officer,No
+CA039,F025,CR020,Senior Cabin Crew,No
+CA040,F025,CR018,Cabin Crew,No

@@ -1108,7 +1108,7 @@ def main():
         return
 
     print("[2/4] Connecting to LanceDB...")
-    lance_db_path = os.path.join(BASE_DIR, "data", "lancedb_store")
+    lance_db_path = os.path.join(BASE_DIR, "source_data", "lancedb_store")
     db = lancedb.connect(lance_db_path)
     try:
         lance_table = db.open_table("lexical_chunks")
@@ -1124,10 +1124,10 @@ def main():
     print("  ✓ LLM + Embedding clients ready")
 
     print("[4/4] Locating SQLite database...")
-    db_path = os.path.join(BASE_DIR, "data", "manufacturing.db")
+    db_path = os.path.join(BASE_DIR, "source_data", "airlines.db")
     if not os.path.exists(db_path):
         print(f"  ✗ Database not found at {db_path}")
-        print("    Run: python data/setup_db.py")
+        print("    Run: python source_data/setup_new_db.py")
         return
     print(f"  ✓ SQLite database: {db_path}")
 

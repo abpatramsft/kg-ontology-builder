@@ -182,7 +182,7 @@ def init_resources():
     print("  OK")
 
     print("[2/4] Connecting to LanceDB...")
-    lance_db_path = os.path.join(BASE_DIR, "data", "lancedb_store")
+    lance_db_path = os.path.join(BASE_DIR, "source_data", "lancedb_store")
     db = lancedb.connect(lance_db_path)
     _lance_table = db.open_table("lexical_chunks")
     print(f"  OK ({len(_lance_table)} chunks)")
@@ -193,7 +193,7 @@ def init_resources():
     print("  OK")
 
     print("[4/4] SQLite database...")
-    _db_path = os.path.join(BASE_DIR, "data", "manufacturing.db")
+    _db_path = os.path.join(BASE_DIR, "source_data", "airlines.db")
     assert os.path.exists(_db_path), f"DB not found: {_db_path}"
     print("  OK")
 

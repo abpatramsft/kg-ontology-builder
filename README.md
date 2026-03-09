@@ -39,17 +39,34 @@ Unstructured Sources          Structured Sources         Structured Sources
 ```
 KG_ontology_generation/
 │
-├── data/                           # Shared data (structured + unstructured)
-│   ├── setup_db.py                 # Creates sample SQLite DB with IndiGo fleet data
-│   ├── manufacturing.db            # SQLite DB: products, assemblies, parts, suppliers
-│   ├── quality_reviews.txt         # Unstructured: Q3 2025 maintenance review notes
-│   ├── customer_feedback.txt       # Unstructured: Q3 2025 customer feedback & cabin quality
-│   └── lancedb_store/              # LanceDB vector DB (auto-created by Layer 2)
+├── source_data_files/               # Raw source data (CSVs, text files, PDFs)
+│   ├── aircraft.csv                 # Aircraft fleet with registrations, models, capacity
+│   ├── airports.csv                 # Airport metadata (IATA/ICAO codes, coordinates)
+│   ├── passengers.csv               # Passenger profiles and frequent-flyer info
+│   ├── crew.csv                     # Crew members with roles and qualifications
+│   ├── fare_classes.csv             # Fare class definitions and perks
+│   ├── routes.csv                   # Route network (origin/destination, distance)
+│   ├── flights.csv                  # Flight schedule and actuals
+│   ├── bookings.csv                 # Passenger bookings with fare and seat info
+│   ├── flight_crew_assignments.csv  # Crew-to-flight assignments
+│   ├── incidents.csv                # Safety and operational incidents
+│   ├── maintenance.csv              # Maintenance records per aircraft
+│   ├── maintenance_incidents.txt    # Unstructured: maintenance incident narratives
+│   ├── operational_report.txt       # Unstructured: operational review report
+│   └── Invoice_1.pdf               # Sample PDF invoice (extracted via GPT-4.1 vision)
 │
-├── utils/                          # Shared utilities (DRY)
+├── source_data/                     # Generated data (created by setup_new_db.py)
+│   ├── setup_new_db.py              # Creates airlines.db from CSVs + extracts PDF invoices
+│   ├── airlines.db                  # SQLite DB (auto-created): 12 tables from CSVs + invoices
+│   ├── maintenance_incidents.txt    # Copied from source_data_files/ by setup script
+│   ├── operational_report.txt       # Copied from source_data_files/ by setup script
+│   └── lancedb_store/               # LanceDB vector DB (auto-created by Layer 2)
+│
+├── utils/                           # Shared utilities (DRY)
 │   ├── __init__.py
-│   ├── llm.py                      # Azure OpenAI LLM + embedding client helpers
-│   └── neo4j_helpers.py            # Neo4j driver, Cypher read/write helpers
+│   ├── llm.py                       # Azure OpenAI LLM + embedding client helpers
+│   ├── neo4j_helpers.py             # Neo4j driver, Cypher read/write helpers
+│   └── pdf_extractor.py             # PDF → JSON extraction via Azure OpenAI GPT-4.1 vision
 │
 ├── domain_graph/                   # Layer 1 — Domain Graph (structured data)
 │   ├── __init__.py
@@ -117,20 +134,39 @@ az login
 
 ### 4. Sample Data
 
+Raw source files (CSVs, `.txt` files, PDFs) live in `source_data_files/`. Run the setup script to create the SQLite database, extract PDF invoices, and copy text files into the working directory:
+
 ```bash
-python data/setup_db.py
+python source_data/setup_new_db.py
 ```
 
-Creates `data/manufacturing.db` with 4 tables:
+This does three things:
+1. **Creates `source_data/airlines.db`** — loads all CSVs from `source_data_files/` into 11 relational tables plus an `invoices` table
+2. **Extracts PDF invoices** — if any `.pdf` files exist in `source_data_files/`, runs GPT-4.1 vision extraction (via `utils/pdf_extractor.py`) and loads the structured JSON into the `invoices` table
+3. **Copies `.txt` files** — copies unstructured text files from `source_data_files/` into `source_data/` for Layer 2 processing
 
-| Table | Rows | Description |
-|---|---|---|
-| `products` | 5 | Aircraft fleet models (A320neo, A321neo, ATR 72-600, A320ceo, A321XLR) |
-| `assemblies` | 12 | Major aircraft subsystems (Landing Gear, Engine, Avionics, etc.) |
-| `parts` | 20 | Component parts (Fan Blade, Brake Disc, FADEC Controller, etc.) |
-| `suppliers` | 15 | Aerospace suppliers (Safran, Pratt & Whitney, Honeywell, etc.) |
+| Table | Description |
+|---|---|
+| `airports` | Airport metadata (IATA/ICAO codes, coordinates, timezone) |
+| `aircraft` | Fleet aircraft with registration, model, capacity, status |
+| `passengers` | Passenger profiles, frequent-flyer tiers |
+| `crew` | Crew members with roles, qualifications, base airport |
+| `fare_classes` | Fare class definitions (pricing, flexibility, perks) |
+| `routes` | Route network (origin → destination, distance, frequency) |
+| `flights` | Flight schedule, actuals, delays, gate/terminal |
+| `bookings` | Passenger bookings linked to flights and fare classes |
+| `flight_crew_assignments` | Crew-to-flight role assignments |
+| `incidents` | Safety/operational incidents linked to flights and aircraft |
+| `maintenance` | Maintenance records per aircraft (type, cost, findings) |
+| `invoices` | PDF-extracted invoice data (products, returns, signatures as JSON) |
 
-FK chain: `products ← assemblies ← parts ← suppliers`
+Key FK chains:
+- `routes → airports` (origin + destination)
+- `flights → routes, aircraft`
+- `bookings → passengers, flights, fare_classes`
+- `flight_crew_assignments → flights, crew`
+- `incidents → flights, aircraft`
+- `maintenance → aircraft`
 
 ---
 
@@ -222,7 +258,7 @@ python lexical_graph/lexical_graph.py --advanced
 
 #### What the pipeline does:
 
-1. **Load** — scans `data/` for `.txt` files
+1. **Load** — scans `source_data/` for `.txt` files
 2. **Chunk** — splits documents into sections using header/underline detection (fallback: paragraph splitting)
 3. **Embed & Store** — embeds all chunks via Azure OpenAI `text-embedding-3-small`, stores vectors + metadata in LanceDB
 4. **Extract SPO Triplets** — LLM extracts one **Subject-Predicate-Object** triplet per chunk (e.g., `Collins Aerospace smoke detector → reported_issue → false alarm during ground testing`)
@@ -618,7 +654,7 @@ RETURN path
 |---|---|---|
 | Graph DB | Neo4j 5 Community (Docker) | Stores the KG ontology (all 3 layers) |
 | Vector DB | LanceDB (local, on-disk) | Chunk embeddings + similarity search (Layer 2) |
-| Structured DB | SQLite (stdlib) | Source data for Layer 1 |
+| Structured DB | SQLite (stdlib) | Source data for Layer 1 (`source_data/airlines.db` — 12 tables + invoices) |
 | LLM | Azure OpenAI GPT-4.1 | Schema enrichment + concept extraction/normalization + entity extraction + inference |
 | Embeddings | Azure OpenAI text-embedding-3-small | Chunk vectorization for Layer 2 |
 | Web Framework | Flask + SSE | Inference agent web UI with real-time streaming |

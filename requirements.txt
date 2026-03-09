@@ -5,3 +5,6 @@ lancedb>=0.29.0
 pyarrow>=15.0.0
 pandas
 flask
+pypdfium2
+pillow
+python-dotenv

@@ -1,0 +1,21 @@
+maintenance_id,aircraft_id,maintenance_type,start_date,end_date,technician_id,facility,status,cost_inr,findings,next_due_date
+M001,AC011,C-Check,2024-01-10,2024-01-25,TEC001,Air India Engineering-DEL,In Progress,4500000,Crack found in nose gear door bracket – repair in progress.,
+M002,AC001,A-Check,2024-01-05,2024-01-06,TEC002,IndiGo Hangar-DEL,Completed,180000,Routine inspection; replaced 2 worn brake pads LH main gear.,2024-05-05
+M003,AC002,A-Check,2024-01-07,2024-01-08,TEC003,IndiGo Hangar-BOM,Completed,185000,All systems nominal; minor hydraulic seal replaced.,2024-05-07
+M004,AC005,Engine Borescope,2024-01-12,2024-01-12,TEC004,IndiGo Hangar-BOM,Completed,95000,No abnormalities found on CFM LEAP-1A32 fan blades.,2024-07-12
+M005,AC019,On-Wing Engine Replace,2024-01-17,2024-01-20,TEC005,IndiGo Hangar-DEL,In Progress,28000000,Bird strike damage on engine No. 2; engine removed and replaced.,
+M006,AC006,Landing Gear Check,2024-01-03,2024-01-03,TEC006,IndiGo Hangar-BOM,Completed,65000,Normal wear; lubrication and torque check completed.,2024-04-03
+M007,AC003,A-Check,2023-12-28,2023-12-29,TEC007,IndiGo Hangar-DEL,Completed,190000,Replaced APU fuel control unit; all checks passed.,2024-04-28
+M008,AC013,B-Check,2024-01-08,2024-01-11,TEC008,GMR Aero Technic-HYD,Completed,850000,Structural inspection complete; replaced 3 worn door seals.,2024-07-08
+M009,AC007,Pressurisation Sensor Replacement,2024-01-17,2024-01-17,TEC009,IndiGo Hangar-BOM,Completed,42000,Cabin pressure sensor replaced; ground test successful.,2025-01-17
+M010,AC016,C-Check,2023-11-15,2023-12-05,TEC001,Air India Engineering-DEL,Completed,5100000,Corrosion treatment on belly skin; FDR and CVR units replaced.,2026-11-15
+M011,AC004,A-Check,2024-01-14,2024-01-15,TEC010,IndiGo Hangar-BLR,Completed,185000,Routine checks passed; replaced co-pilot side windshield wiper blade.,2024-05-14
+M012,AC009,Engine Performance Restoration,2023-12-01,2023-12-15,TEC004,CFM MRO-SIN,Completed,6800000,CFM LEAP-1A26 engine performance restored; fuel flow normalized.,2025-12-01
+M013,AC012,Avionics Software Update,2024-01-09,2024-01-09,TEC011,IndiGo Hangar-DEL,Completed,28000,FMS and ACARS software updated to latest version.,2025-01-09
+M014,AC014,A-Check,2024-01-18,2024-01-19,TEC007,IndiGo Hangar-DEL,Completed,188000,Replaced faulty PACKS valve; all pressurisation tests passed.,2024-05-18
+M015,AC008,Brake Assembly Replace,2024-01-13,2024-01-13,TEC012,IndiGo Hangar-MAA,Completed,210000,RH main gear brake assembly replaced; carbon heat stack worn.,2024-07-13
+M016,AC010,A-Check,2024-01-16,2024-01-17,TEC013,IndiGo Hangar-BOM,Completed,192000,Routine checks; fuel nozzle cleaned on engine No. 1.,2024-05-16
+M017,AC015,IFE System Repair,2024-01-06,2024-01-06,TEC011,IndiGo Hangar-HYD,Completed,38000,Seat-back IFE units in rows 10-15 replaced.,2025-01-06
+M018,AC017,A-Check,2024-01-20,2024-01-21,TEC003,IndiGo Hangar-BOM,Scheduled,190000,,2024-05-20
+M019,AC018,Wing Leading Edge Inspection,2024-01-22,2024-01-22,TEC006,IndiGo Hangar-DEL,Scheduled,55000,,
+M020,AC020,A-Check,2024-01-23,2024-01-24,TEC008,GMR Aero Technic-HYD,Scheduled,188000,,2024-05-23

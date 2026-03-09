@@ -62,9 +62,9 @@ header h1 span { color: var(--accent); }
 header p { color: var(--text-dim); font-size: .82rem; }
 
 /* ── Input Area ────────────────────────────────────────────── */
-.input-area { display: flex; gap: 10px; margin-bottom: 12px; }
+.input-area { display: flex; gap: 10px; margin-bottom: 12px; align-items: flex-start; }
 
-.input-area input {
+.input-area textarea {
   flex: 1;
   background: var(--surface);
   border: 1px solid var(--border);
@@ -75,9 +75,14 @@ header p { color: var(--text-dim); font-size: .82rem; }
   font-family: var(--font);
   outline: none;
   transition: border-color .2s;
+  resize: none;
+  overflow: hidden;
+  min-height: 46px;
+  max-height: 200px;
+  line-height: 1.5;
 }
-.input-area input:focus { border-color: var(--accent); }
-.input-area input::placeholder { color: var(--text-dim); }
+.input-area textarea:focus { border-color: var(--accent); }
+.input-area textarea::placeholder { color: var(--text-dim); }
 
 .btn {
   background: var(--accent);
@@ -377,16 +382,16 @@ header p { color: var(--text-dim); font-size: .82rem; }
   </header>
 
   <div class="input-area">
-    <input type="text" id="queryInput" placeholder="Ask a question about IndiGo Airlines data..."
-           autocomplete="off" />
+    <textarea id="queryInput" placeholder="Ask a question about IndiGo Airlines data..."
+              autocomplete="off" rows="1"></textarea>
     <button class="btn" id="askBtn" onclick="submitQuestion()">Ask Agent</button>
   </div>
 
   <div class="samples">
-    <button onclick="fillSample(this)">For every supplier whose rating was downgraded in the Q3 quality review, find their contracted parts, the assembly those parts belong to, and the aircraft model affected. Cross-reference with any customer complaints mentioning those same components.</button>
-    <button onclick="fillSample(this)">Trace the full supply chain path from Pratt & Whitney (the supplier) to every aircraft model they supply, showing each intermediate step (part → assembly → product). For each aircraft model, summarize any engine-related issues mentioned in the unstructured quality reviews</button>
-    <button onclick="fillSample(this)">The database lists Honeywell Aerospace with a rating of 4.7, but the quality review mentions their rating was downgraded to 4.3 due to brake disc issues. Identify all such discrepancies between the structured supplier ratings and the ratings mentioned in the unstructured text. What is the root cause for each discrepancy?</button>
-    <button onclick="fillSample(this)">The customer feedback report shows lavatory issues increased 32.8% and cabin air quality complaints increased 41.9% from Q2 to Q3. Using the ontology, identify which specific suppliers and parts are involved in these complaint categories, and check if those suppliers/parts appear in the quality review with any known issues</button>
+    <button onclick="fillSample(this)">Give me a full travel history for our passenger Aarav Sharma — every flight he took, where he flew, how much he spent, what class he booked, and who the pilots were on his flight</button>
+    <button onclick="fillSample(this)">Which aircraft had a bird strike recently, and what was the full operational fallout — the flight details, crew on board, maintenance triggered, and cost?</button>
+    <button onclick="fillSample(this)">A crew member raised a fatigue concern about being assigned consecutive red-eye flights. Which flights were those, what were the actual departure and arrival times, and was the rest gap between them compliant with the 12-hour DGCA minimum?</button>
+    <button onclick="fillSample(this)">What's causing our flight delays? Break down total delay minutes by airport, identify whether they're ATC, weather, or technical, and tell me which single flight had the worst delay this month and why</button>
   </div>
 
   <div class="timeline" id="timeline">
@@ -538,6 +543,7 @@ function addSubstep(iter, type, content, detailHtml) {
 /* ── Fill sample ───────────────────────────────────────────── */
 function fillSample(btn) {
   $('#queryInput').value = btn.textContent;
+  autoResize($('#queryInput'));
   $('#queryInput').focus();
 }
 
@@ -690,8 +696,18 @@ function syntaxHighlight(json) {
     .replace(/: "([^"]*)"/g, ': <span style="color:var(--green)">"$1"</span>');
 }
 
+/* ── Auto-resize textarea ──────────────────────────────────── */
+function autoResize(el) {
+  el.style.height = 'auto';
+  el.style.height = Math.min(el.scrollHeight, 200) + 'px';
+}
+$('#queryInput').addEventListener('input', function() { autoResize(this); });
+
 $('#queryInput').addEventListener('keydown', e => {
-  if (e.key === 'Enter' && !$('#askBtn').disabled) submitQuestion();
+  if (e.key === 'Enter' && !e.shiftKey && !$('#askBtn').disabled) {
+    e.preventDefault();
+    submitQuestion();
+  }
 });
 </script>
 

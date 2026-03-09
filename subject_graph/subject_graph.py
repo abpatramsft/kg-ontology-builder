@@ -523,7 +523,7 @@ def _llm_confirm_match(
             context_snippets.append(dc["topic_summary"][:150])
     context_text = "; ".join(context_snippets) if context_snippets else subject.get("description", "")
 
-    prompt = f"""You are an entity resolution system for IndiGo Airlines knowledge graph.
+    prompt = f"""You are an entity resolution system for an airlines knowledge graph.
 
 Determine if the concept/entity from unstructured documents corresponds to the
 structured database table. The "CORRESPONDS_TO" relationship means: data about
@@ -958,7 +958,7 @@ def main():
     direction_label = "per subject → tables" if args.direction == "subject" else "per table → subjects"
     print("=" * 70)
     print("  LAYER 3 — SUBJECT GRAPH BRIDGE BUILDER")
-    print("  IndiGo Airlines: Bridging Unstructured ↔ Structured")
+    print("  Airlines: Bridging Unstructured ↔ Structured")
     print(f"  Resolution mode: {mode}")
     print(f"  Resolution direction: {direction_label}")
     if not args.advanced:
@@ -994,7 +994,7 @@ def main():
 
         # Open LanceDB for the agent's vector search tool
         import lancedb
-        lance_db = lancedb.connect(os.path.join(PROJECT_ROOT, "data", "lancedb_store"))
+        lance_db = lancedb.connect(os.path.join(PROJECT_ROOT, "source_data", "lancedb_store"))
         try:
             lance_table = lance_db.open_table("lexical_chunks")
         except Exception as e:
@@ -1033,11 +1033,11 @@ def main():
 
     # Step 7: Demo queries
     demo_questions = [
-        "Which suppliers have quality issues?",
-        "What do we know about brake assemblies?",
-        "Tell me about engine maintenance problems",
-        "Which parts come from Pratt & Whitney?",
-        "What quality data exists for the A320neo fleet?",
+        "Which aircraft have had maintenance issues?",
+        "What do we know about flight delays?",
+        "Tell me about crew scheduling problems",
+        "Which routes have the highest passenger load?",
+        "What incident data exists for recent flights?",
     ]
     print("\n\n[Step 7] Running demo cross-source queries...")
     for q in demo_questions:

@@ -1,0 +1,127 @@
+{
+  "InvoiceNumber": "3847193",
+  "PurchaseOrderNumber": "15931",
+  "CustomerName": "Sharp Consulting",
+  "CustomerAddress": "73 Regal Way, Leeds, LS1 5AB, UK",
+  "DeliveryDate": "5/16/2024",
+  "PayableBy": "5/24/2024",
+  "Products": [
+    {
+      "Id": "PPR006",
+      "Description": "UNIV. A4 80gsm",
+      "UnitPrice": 25.86,
+      "Quantity": 5,
+      "Total": 129.3
+    },
+    {
+      "Id": "3M12",
+      "Description": "NOTES 51x76mm Y",
+      "UnitPrice": 3.0,
+      "Quantity": 12,
+      "Total": 36.0
+    },
+    {
+      "Id": "ES40",
+      "Description": "SHIP. LABEL 54x101mm",
+      "UnitPrice": 136.0,
+      "Quantity": 1,
+      "Total": 136.0
+    },
+    {
+      "Id": "KF195909",
+      "Description": "RULED REFIL PAD A4",
+      "UnitPrice": 13.22,
+      "Quantity": 10,
+      "Total": 132.2
+    },
+    {
+      "Id": "JF9912413BF",
+      "Description": "BUBBLE FILM ROLL CL.",
+      "UnitPrice": 15.46,
+      "Quantity": 12,
+      "Total": 185.52
+    },
+    {
+      "Id": "ML10109",
+      "Description": "BUBBLE POSTAL BAG W",
+      "UnitPrice": 20.88,
+      "Quantity": 5,
+      "Total": 104.4
+    },
+    {
+      "Id": "JDK801",
+      "Description": "C4 POCKET WINDOW",
+      "UnitPrice": 71.29,
+      "Quantity": 1,
+      "Total": 71.29
+    },
+    {
+      "Id": "KF030",
+      "Description": "DL ENV. PEEL & SEAL",
+      "UnitPrice": 18.83,
+      "Quantity": 1,
+      "Total": 18.83
+    },
+    {
+      "Id": "JF7901",
+      "Description": "MAIL BOX 455x320x55",
+      "UnitPrice": 38.54,
+      "Quantity": 4,
+      "Total": 154.16
+    },
+    {
+      "Id": "MA197",
+      "Description": "STRETCHWRAP ROLL",
+      "UnitPrice": 16.62,
+      "Quantity": 5,
+      "Total": 83.1
+    },
+    {
+      "Id": "ST4086",
+      "Description": "BALLPOINT PEN MED.",
+      "UnitPrice": 2.49,
+      "Quantity": 10,
+      "Total": 24.9
+    }
+  ],
+  "Returns": [
+    {
+      "Id": "MA145",
+      "Description": "POSTAL TUBE BROWN",
+      "Quantity": 1,
+      "Reason": "This item was provided in previous order as a replacement."
+    },
+    {
+      "Id": "JF7902",
+      "Description": "MAILBOX 25PK",
+      "Quantity": 1,
+      "Reason": "Wrong color. Not required."
+    }
+  ],
+  "TotalQuantity": 66,
+  "TotalPrice": 1075.7,
+  "ProductsSignatures": [
+    {
+      "Type": "Customer",
+      "Name": "Sarah H.",
+      "IsSigned": true
+    },
+    {
+      "Type": "Supplier",
+      "Name": "James T.",
+      "IsSigned": true
+    }
+  ],
+  "ReturnsSignatures": [
+    {
+      "Type": "Customer",
+      "Name": "Sarah H.",
+      "IsSigned": true
+    },
+    {
+      "Type": "Supplier",
+      "Name": "James T.",
+      "IsSigned": true
+    }
+  ]
+}

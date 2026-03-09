@@ -1,0 +1,36 @@
+booking_id,passenger_id,flight_id,booking_date,fare_class,seat_number,ticket_price_inr,check_in_status,baggage_checkin_kg,baggage_cabin_kg,meal_preference,web_checkin
+BK001,P001,F001,2024-01-10,SuperSaver,12A,3850,Checked-In,20,7,Veg,Yes
+BK002,P002,F001,2024-01-08,Flexi,14B,5200,Checked-In,15,7,NonVeg,Yes
+BK003,P003,F002,2024-01-12,SuperSaver,25C,3750,Checked-In,23,7,Veg,No
+BK004,P005,F003,2024-01-09,Business Plus,2A,12500,Checked-In,30,10,Veg,Yes
+BK005,P007,F003,2024-01-11,SuperSaver,18D,3750,Checked-In,25,7,Veg,No
+BK006,P004,F004,2024-01-14,Flexi,10C,5100,Checked-In,20,7,Jain,Yes
+BK007,P009,F005,2024-01-10,SuperSaver,22A,8200,Checked-In,15,7,Veg,Yes
+BK008,P015,F005,2024-01-07,Business Plus,1A,22000,Checked-In,32,10,Veg,Yes
+BK009,P027,F006,2024-01-13,Flexi,17B,8900,Checked-In,20,7,NonVeg,No
+BK010,P006,F007,2024-01-11,SuperSaver,30D,7800,Checked-In,15,7,Veg,Yes
+BK011,P008,F008,2024-01-13,SuperSaver,33A,4200,Checked-In,20,7,Veg,No
+BK012,P010,F009,2024-01-14,Flexi,08C,5500,Checked-In,22,7,NonVeg,Yes
+BK013,P011,F010,2024-01-15,SuperSaver,15B,3600,Checked-In,18,7,Veg,Yes
+BK014,P012,F010,2024-01-12,SuperSaver,16C,3600,Checked-In,20,7,Jain,No
+BK015,P013,F011,2024-01-11,Flexi,11A,4800,Checked-In,25,7,NonVeg,Yes
+BK016,P014,F013,2024-01-10,SuperSaver,40B,5900,Checked-In,15,7,Veg,Yes
+BK017,P016,F013,2024-01-14,SuperSaver,42C,5900,Checked-In,0,7,Veg,No
+BK018,P017,F014,2024-01-15,Flexi,06A,4200,Checked-In,20,7,NonVeg,Yes
+BK019,P018,F015,2024-01-14,SuperSaver,19B,3500,Checked-In,18,7,Veg,Yes
+BK020,P019,F016,2024-01-15,SuperSaver,28D,7500,Not Checked-In,25,7,None,No
+BK021,P020,F017,2024-01-14,Flexi,13C,5300,Checked-In,20,7,Veg,Yes
+BK022,P021,F019,2024-01-12,SuperSaver,55A,9800,Checked-In,20,7,NonVeg,Yes
+BK023,P023,F019,2024-01-10,Business Plus,1C,35000,Checked-In,40,10,Halal,Yes
+BK024,P022,F020,2024-01-13,SuperSaver,60B,9200,Checked-In,15,7,NonVeg,Yes
+BK025,P024,F021,2024-01-15,SuperSaver,21A,3850,Checked-In,20,7,Veg,Yes
+BK026,P025,F022,2024-01-16,Flexi,14D,8200,Checked-In,22,7,Veg,No
+BK027,P026,F023,2024-01-16,SuperSaver,38A,7800,Checked-In,18,7,Veg,No
+BK028,P028,F024,2024-01-16,SuperSaver,45C,4200,Checked-In,20,7,Veg,Yes
+BK029,P029,F025,2024-01-17,Business Plus,2B,42000,Checked-In,35,10,Veg,Yes
+BK030,P030,F026,2024-01-17,SuperSaver,07D,3100,Checked-In,10,7,Veg,Yes
+BK031,P001,F029,2024-01-16,Business Plus,1A,12500,Checked-In,30,10,Veg,Yes
+BK032,P007,F029,2024-01-17,Flexi,12B,5000,Checked-In,20,7,Veg,Yes
+BK033,P015,F025,2024-01-17,Business Plus,3A,42000,Checked-In,40,10,Veg,Yes
+BK034,P003,F027,2024-01-17,SuperSaver,26C,4500,Checked-In,22,7,Veg,No
+BK035,P009,F028,2024-01-17,Flexi,15A,4100,Checked-In,20,7,NonVeg,Yes

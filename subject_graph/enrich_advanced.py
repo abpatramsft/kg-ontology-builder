@@ -427,7 +427,7 @@ class ResolutionAgent:
         de_names = [e["name"] for e in self.all_domain_entities]
 
         system = textwrap.dedent(f"""\
-        You are a senior entity resolution agent for IndiGo Airlines knowledge graph.
+        You are a senior entity resolution agent for an airlines knowledge graph.
 
         Your task: Determine which structured database table(s) the subject
         "{self.target_subject['name']}" (type: {self.target_subject['type']})
@@ -435,8 +435,8 @@ class ResolutionAgent:
 
         The "CORRESPONDS_TO" relationship means: data about this concept can be
         found in or is semantically related to the database table. For example,
-        "brake assembly" CORRESPONDS_TO the "assemblies" table because brake
-        assemblies are a type of assembly tracked in that table.
+        a "Boeing 737" subject CORRESPONDS_TO the "aircraft" table because it
+        is a type of aircraft tracked in that table.
 
         You work in a ReAct loop — you THINK, then ACT (use a tool to explore),
         then OBSERVE the result, and repeat until you have enough context.
@@ -479,8 +479,8 @@ class ResolutionAgent:
         2. Examine each candidate domain entity to understand what it contains.
         3. Look for semantic overlap: does the subject's document context mention
            things that live in a particular table?
-        4. Consider indirect links: a supplier name might correspond to the
-           "suppliers" table even if the text doesn't mention "supplier table".
+        4. Consider indirect links: a crew member's name might correspond to the
+           "crew" table even if the text doesn't mention "crew table".
         5. Use search_similar to find related document mentions if helpful.
         6. When confident, produce your FINAL_ANSWER.
         7. Aim for 2-5 exploration steps. Don't over-explore.
@@ -488,11 +488,11 @@ class ResolutionAgent:
         ── CONFIDENCE GUIDELINES ──────────────────────────────────────────────
 
         - 0.9-1.0: The subject is an exact instance of what the table tracks
-          (e.g., "Pratt & Whitney" → suppliers table)
+          (e.g., "Boeing 737" → aircraft table)
         - 0.7-0.9: The subject is strongly related to the table's domain
-          (e.g., "PW1100G engine" → assemblies table)
+          (e.g., "engine maintenance" → maintenance table)
         - 0.5-0.7: The subject has a meaningful connection to the table
-          (e.g., "engine vibration" → assemblies or parts table)
+          (e.g., "turbulence event" → incidents or flights table)
         - Below 0.5: Weak or tangential — prefer not to link
 
         ── IMPORTANT RULES ────────────────────────────────────────────────────
@@ -516,7 +516,7 @@ class ResolutionAgent:
         de = self.target_domain_entity
 
         system = textwrap.dedent(f"""\
-        You are a senior entity resolution agent for IndiGo Airlines knowledge graph.
+        You are a senior entity resolution agent for an airlines knowledge graph.
 
         Your task: Determine which document subject(s) correspond to the
         structured database table "{de['name']}" (domain: {de['domain']}).
@@ -524,9 +524,9 @@ class ResolutionAgent:
 
         The "CORRESPONDS_TO" relationship means: the subject, as discussed in
         the document corpus, is semantically related to or has data represented
-        in this database table. For example, the subjects "brake assembly" and
-        "landing gear" might CORRESPOND_TO the "assemblies" table because they
-        are types of assemblies tracked in that table.
+        in this database table. For example, the subjects "flight delay" and
+        "route cancellation" might CORRESPOND_TO the "flights" table because they
+        are events tracked in that table.
 
         You work in a ReAct loop — you THINK, then ACT (use a tool to explore),
         then OBSERVE the result, and repeat until you have enough context.
@@ -572,7 +572,7 @@ class ResolutionAgent:
         3. Look for semantic overlap: does the subject's context mention data that
            lives in this table?
         4. Consider indirect links: a subject named "fuel efficiency" might
-           correspond to the "products" table if aircraft fuel data is there.
+           correspond to the "flights" table if fuel consumption data is there.
         5. Use search_similar to find related document mentions if helpful.
         6. When confident, produce your FINAL_ANSWER.
         7. Aim for 2-5 exploration steps.
@@ -959,7 +959,7 @@ def validate_correspondences(
 
     prompt = textwrap.dedent(f"""\
     You are a senior knowledge graph architect reviewing entity resolution results
-    for IndiGo Airlines.
+    for an airlines company.
 
     Below is the mapping between Subject nodes (extracted from documents) and
     DomainEntity nodes (structured database tables). {direction_note}
@@ -1198,7 +1198,7 @@ if __name__ == "__main__":
 
     print("=" * 70)
     print("  ADVANCED ENTITY RESOLUTION — ReAct Agent")
-    print("  IndiGo Airlines: Subject → DomainEntity Bridge")
+    print("  Airlines: Subject → DomainEntity Bridge")
     print("=" * 70)
 
     print("\n[1] Connecting to Neo4j...")
@@ -1227,7 +1227,7 @@ if __name__ == "__main__":
     embedding_client = None
     try:
         import lancedb
-        lance_db = lancedb.connect(os.path.join(PROJECT_ROOT, "data", "lancedb_store"))
+        lance_db = lancedb.connect(os.path.join(PROJECT_ROOT, "source_data", "lancedb_store"))
         lance_table = lance_db.open_table("lexical_chunks")
         embedding_client = get_embedding_client()
         print("    LanceDB connected — vector search available")
@@ -1244,7 +1244,7 @@ if __name__ == "__main__":
     print_correspondences(correspondences)
 
     # Save results
-    trace_path = os.path.join(PROJECT_ROOT, "data", "correspondence_trace.json")
+    trace_path = os.path.join(PROJECT_ROOT, "source_data", "correspondence_trace.json")
     with open(trace_path, "w") as f:
         json.dump(correspondences, f, indent=2)
     print(f"\n  Saved correspondences to {trace_path}")

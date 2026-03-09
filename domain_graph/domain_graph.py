@@ -40,7 +40,7 @@ from utils.llm import get_llm_client, call_llm, parse_llm_json
 from utils.neo4j_helpers import get_neo4j_driver, run_cypher, run_cypher_write
 
 # ─── Configuration ───────────────────────────────────────────────────────────
-DB_PATH = os.path.join(PROJECT_ROOT, "data", "manufacturing.db")
+DB_PATH = os.path.join(PROJECT_ROOT, "source_data", "airlines.db")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -160,23 +160,23 @@ def enrich_with_llm(schema: dict, client: AzureOpenAI) -> dict:
             for fk in info["foreign_keys"]
         ) or "None"
 
-        prompt = f"""You are a data architect analyzing a database schema for IndiGo Airlines.
+        prompt = f"""You are a data architect analyzing a database schema for an airlines company.
 
 Given the following table, provide a JSON response with exactly these fields:
 - "description": A 1-2 sentence summary of what this table represents and its business purpose.
-- "domain": A single domain category label (e.g., "fleet_management", "supply_chain", "maintenance").
+- "domain": A single domain category label (e.g., "fleet_management", "flight_operations", "crew_management", "bookings", "revenue", "maintenance", "route_network", "passenger_services").
 - "semantic_relationships": An array of objects, each with:
     - "target_table": name of a related table from this list: {all_table_names}
-    - "relationship_type": a semantic edge label in UPPER_SNAKE_CASE (e.g., PART_OF, SUPPLIES, BELONGS_TO)
+    - "relationship_type": a semantic edge label in UPPER_SNAKE_CASE (e.g., OPERATES_ON, ASSIGNED_TO, BOOKED_FOR, BELONGS_TO)
     - "reason": brief explanation of why this relationship exists
 - "concepts": An array of 2-5 abstract, high-level concepts that this table encapsulates. Each with:
-    - "name": A concise concept label (e.g., "Aircraft Fleet Composition", "Supplier Relationship", "Component Lifecycle")
+    - "name": A concise concept label (e.g., "Fleet Composition", "Route Network", "Crew Scheduling", "Revenue Management")
     - "description": 1 sentence explaining what this concept represents in the business domain
     - "derived_from": array of column names from this table that inform this concept
   IMPORTANT: Concepts should be ABSTRACT business ideas, NOT raw column values or column names.
   Think about what business knowledge this table captures at a higher level.
-  Examples: from a 'parts' table with columns (part_name, weight_kg, material, supplier_id) you might derive
-  concepts like "Component Specification", "Material Classification", "Supplier Relationship".
+  Examples: from a 'flights' table with columns (flight_number, origin, destination, departure_time, aircraft_id) you might derive
+  concepts like "Flight Schedule", "Route Coverage", "Aircraft Utilization".
 
 Table: {table_name}
 Columns: {col_summary}
@@ -248,8 +248,8 @@ def normalize_concepts(enriched: dict, client: AzureOpenAI, verbose: bool = True
     Normalize and deduplicate concepts across all tables, then identify
     cross-table concept relationships.
 
-    Similar concepts from different tables (e.g., "Supplier Relationship" from
-    parts and "Vendor Management" from suppliers) are merged into a single
+    Similar concepts from different tables (e.g., "Route Coverage" from
+    flights and "Network Planning" from routes) are merged into a single
     canonical concept that retains provenance from all contributing tables.
 
     This mirrors the entity resolution pattern from the Lexical Graph layer.
@@ -299,7 +299,7 @@ def normalize_concepts(enriched: dict, client: AzureOpenAI, verbose: bool = True
     # ── Step 2: LLM-based normalization ──────────────────────────────
     concept_list_json = json.dumps(all_concepts, indent=2)
 
-    prompt = f"""You are a senior data architect reviewing abstract concepts extracted from database tables for IndiGo Airlines.
+    prompt = f"""You are a senior data architect reviewing abstract concepts extracted from database tables for an airlines company.
 
 Below is a list of concepts, each attributed to a source table. Your tasks:
 
@@ -308,7 +308,7 @@ abstract idea (even if named differently). Group them and pick the best canonica
 Only merge if they truly represent the same concept — do not over-merge.
 
 TASK 2 — CROSS-LINKS: Identify pairs of concepts that are DISTINCT but semantically
-related (e.g., "Aircraft Component" is related to "Assembly Structure" via COMPOSED_OF).
+related (e.g., "Flight Schedule" is related to "Crew Assignment" via DEPENDS_ON).
 Only include meaningful, non-trivial relationships.
 
 Concepts:
@@ -961,7 +961,7 @@ def main():
     mode = "ReAct Agent" if args.advanced else "Single-shot LLM"
     print("=" * 70)
     print("  LAYER 1 — DOMAIN GRAPH BUILDER")
-    print("  IndiGo Airlines Fleet / Supply Chain Ontology")
+    print("  Airlines Database Ontology")
     print(f"  Enrichment mode: {mode}")
     print("=" * 70)
 
@@ -969,7 +969,7 @@ def main():
     print("\n[Step 1] Introspecting SQLite schema...")
     if not os.path.exists(DB_PATH):
         print(f"  ERROR: Database not found at {DB_PATH}")
-        print("  Run 'python data/setup_db.py' first to create the sample database.")
+        print("  Run 'python source_data/setup_new_db.py' first to create the sample database.")
         return
     schema = introspect_sqlite(DB_PATH)
     print_schema(schema)
@@ -1002,10 +1002,10 @@ def main():
 
     # Step 5: Demo Queries
     demo_questions = [
-        "Which suppliers provide parts?",
-        "What data do we have about engines?",
-        "Tell me about the landing gear",
-        "Which tables are related to assemblies?",
+        "Which aircraft operate on specific routes?",
+        "What data do we have about flight operations?",
+        "Tell me about crew assignments",
+        "Which tables are related to bookings?",
     ]
     print("\n\n[Step 5] Running demo queries...")
     for q in demo_questions:

@@ -1,0 +1,64 @@
+IndiGo Airlines — Operational Performance & Delay Analysis Report (Q4 2024)
+===========================================================================
+
+Compiled by: Network Operations Centre (NOC), IndiGo Airlines
+Review Period: October – December 2024
+Classification: Internal Use Only
+
+Route Performance & On-Time Metrics
+-------------------------------------
+
+The Delhi (DEL) to Mumbai (BOM) corridor remained the highest-frequency domestic route
+with 49 weekly departures on flight 6E-201, operating primarily on A320 aircraft (AC001,
+registration VT-INA). On-time performance for this route averaged 82.3% for the quarter,
+with most delays concentrated in the November fog season. ATC-imposed ground delays at
+Indira Gandhi International Airport contributed 65% of total delay minutes on DEL departures.
+
+The Bangalore (BLR) to Hyderabad (HYD) sector, served by route R005, showed the best
+punctuality in the network at 96.1% OTP. Flight 6E-205 operating this route on aircraft
+AC005 (VT-INE) recorded zero cancellations over the quarter. The short 545 km distance
+and reliable weather patterns at both Kempegowda International Airport and Rajiv Gandhi
+International Airport contributed to this performance.
+
+International routes showed mixed results. The Delhi to Dubai (DXB) service via route R009
+experienced three significant delays in December due to runway maintenance at Dubai
+International Airport. Flight F009 accumulated 145 delay minutes across these events, though
+the Airbus A321neo aircraft AC002 (VT-INB) operated without any mechanical dispatch issues.
+
+Crew Scheduling & Fatigue Management
+--------------------------------------
+
+Pilot-in-Command Capt. Anil Kapoor (CR001, employee EMP10001) completed 247 block hours
+during Q4, well within the DGCA-mandated 1000-hour annual limit. Based at DEL with 22 years
+of experience and an ATPL qualification, Capt. Kapoor primarily commanded DEL-BOM and DEL-BLR
+sectors. No fatigue reports were filed.
+
+First Officer Priya Nair (CR002, EMP10002) logged 312 block hours across 98 sectors,
+predominantly on the BOM-GOI and BOM-BLR routes. Her CPL qualification and 8 years of
+experience place her on the promotion track for command upgrade evaluation in Q2 2025.
+
+Senior cabin crew member Rahul Verma (CR006, EMP10006) flagged a roster concern — three
+consecutive red-eye flights (F010, F012, F014) assigned within a 5-day window in November.
+The crew rostering team adjusted subsequent assignments to ensure compliant rest periods.
+The base at Chhatrapati Shivaji Maharaj International Airport (BOM) was identified as needing
+two additional cabin crew members to maintain adequate reserve staffing levels.
+
+Passenger Booking Trends
+--------------------------
+
+SuperSaver fares accounted for 52% of all bookings in Q4, with an average ticket price
+of INR 4,200 on domestic routes. Business Plus bookings saw a 14% increase compared to Q3,
+driven largely by corporate travel on the DEL-BOM and BLR-BOM corridors. Passenger Aarav
+Sharma (P001, Platinum tier, frequent flyer FF100001) flew 14 sectors during the quarter,
+predominantly in Flexi class. His feedback highlighted satisfaction with web check-in and
+meal selection options.
+
+Passenger Diya Patel (P002, Gold tier) raised a complaint regarding baggage handling on
+flight F003 from BLR to DEL on 2024-01-15 — her checked baggage (15 kg) was delayed by
+6 hours at DEL arrivals. The incident coincided with an ATC slot delay (incident I001) that
+caused ground handling resource reallocation at the Delhi hub. Compensation of INR 2,500
+was processed under the passenger charter.
+
+Web check-in adoption reached 71% across all bookings, up from 63% in Q3. Passengers booking
+through the 6E app showed 89% web check-in rates versus 54% for those booking via third-party
+OTAs. Veg meal preference dominated at 58% of pre-orders, followed by Non-Veg at 34%.

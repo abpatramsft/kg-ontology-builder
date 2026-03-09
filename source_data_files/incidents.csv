@@ -1,0 +1,16 @@
+incident_id,flight_id,aircraft_id,incident_date,incident_type,severity,phase_of_flight,description,resolution_status,reported_to_dgca
+I001,F003,AC003,2024-01-15,Delay-ATC,Low,Ground,ATC slot delay caused 30 minute departure delay at DEL due to airspace congestion over northern India.,Closed,No
+I002,F006,AC006,2024-01-15,Delay-Technical,Medium,Ground,Hydraulic fluid low-pressure warning triggered during pre-flight checks on A321neo. Part replaced; delayed 50 mins.,Closed,Yes
+I003,F016,AC016,2024-01-16,Delay-Technical,Medium,Ground,Engine start sequence fault on left engine. Crew followed QRH; issue resolved after reset. Delayed 50 mins.,Closed,Yes
+I004,F011,AC011,2024-01-15,Turbulence,Low,Cruise,Moderate turbulence encountered at FL340 over central India. Seat-belt sign activated; 2 minor soft-tissue injuries reported.,Closed,Yes
+I005,F019,AC019,2024-01-17,Bird Strike,High,Takeoff,Bird ingestion into engine No. 2 during takeoff roll at DEL. Takeoff rejected below V1. Aircraft inspected; minor FOD damage.,Under Investigation,Yes
+I006,F013,AC013,2024-01-15,Runway Excursion-Minor,High,Landing,Aircraft landed long at COK; exited taxiway at reduced speed. No injuries; aircraft inspected and cleared.,Under Investigation,Yes
+I007,F023,AC007,2024-01-17,Pressurisation Warning,Medium,Climb,Cabin pressure warning at FL200; auto-descent initiated per procedure. Warning was spurious (sensor fault). Replaced.,Closed,Yes
+I008,F009,AC009,2024-01-15,Passenger Medical,Low,Cruise,Passenger reported chest pain en-route CCU. In-flight medical kit used; doctor on board assisted. Passenger ambulanced on arrival.,Closed,No
+I009,F020,AC020,2024-01-17,Delay-Weather,Low,Ground,Ground stop at BOM due to low-visibility fog procedure; delayed 35 mins before departure to DXB.,Closed,No
+I010,F027,AC004,2024-01-18,Delay-ATC,Low,Ground,Late ATC clearance at BLR due to peak hour congestion.,Closed,No
+I011,F017,AC017,2024-01-16,Security Alert,Medium,Ground,Unattended baggage found at BOM check-in area. Bag screened; found to be misplaced checked bag. Normal departure maintained.,Closed,Yes
+I012,F025,AC019,2024-01-18,Turbulence,Medium,Cruise,Severe clear-air turbulence at FL370 over Arabian Sea; 3 passengers with minor injuries. First aid administered on board.,Closed,Yes
+I013,F030,AC006,2024-01-19,Brakes Advisory,Low,Landing,Brake temperature advisory triggered post-landing at KTM. Normal cooling procedure followed; cleared for next sector.,Closed,No
+I014,F002,AC002,2024-01-15,Passenger Disturbance,Low,Cruise,Passenger dispute over reclined seat; resolved by cabin crew without diversion.,Closed,No
+I015,F015,AC015,2024-01-16,TCAS RA,High,Cruise,TCAS Resolution Advisory issued at FL290; crew responded correctly with climb manoeuvre. Separation maintained.,Closed,Yes

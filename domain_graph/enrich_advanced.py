@@ -345,7 +345,7 @@ class EnrichmentAgent:
 
     def _build_system_prompt(self):
         system = textwrap.dedent(f"""\
-        You are a senior data architect agent analyzing a database for IndiGo Airlines.
+        You are a senior data architect agent analyzing a database for an airlines company.
 
         Your task: Produce rich semantic metadata for the table "{self.target_table}".
 
@@ -371,19 +371,19 @@ class EnrichmentAgent:
         ── REQUIRED OUTPUT SCHEMA (for FINAL_ANSWER) ─────────────────────────
 
         {{
-          "description": "2-3 sentences: what this table represents, what kind of data it holds, its business purpose in the context of IndiGo Airlines",
-          "domain": "single domain label (e.g., fleet_management, supply_chain, maintenance, procurement)",
+          "description": "2-3 sentences: what this table represents, what kind of data it holds, its business purpose in the context of airlines operations",
+          "domain": "single domain label (e.g., fleet_management, flight_operations, crew_management, bookings, revenue, maintenance, route_network, passenger_services)",
           "semantic_relationships": [
             {{
               "target_table": "<name of related table from {self.all_tables}>",
-              "relationship_type": "UPPER_SNAKE_CASE label (e.g., PART_OF, SUPPLIES, BELONGS_TO, COMPOSED_OF)",
+              "relationship_type": "UPPER_SNAKE_CASE label (e.g., OPERATES_ON, ASSIGNED_TO, BOOKED_FOR, BELONGS_TO, COMPOSED_OF)",
               "reason": "1 sentence explaining WHY this semantic relationship exists, grounded in the data you observed"
             }}
           ],
           "concepts": [
             {{
-              "name": "<Abstract business concept derived from this table, e.g. 'Aircraft Component', 'Supplier Relationship'>",
-              "description": "1 sentence: what this concept represents in the airline/aviation domain",
+              "name": "<Abstract business concept derived from this table, e.g. 'Flight Schedule', 'Crew Assignment', 'Revenue Stream'>",
+              "description": "1 sentence: what this concept represents in the airlines domain",
               "derived_from": ["<column_name_1>", "<column_name_2>"]
             }}
           ]
@@ -391,7 +391,7 @@ class EnrichmentAgent:
 
         CONCEPT GUIDELINES:
         - Extract 2-5 abstract business concepts per table.
-        - Concepts are HIGH-LEVEL ideas (e.g., 'Aircraft Component', 'Procurement Lifecycle'), NOT raw column names or data values.
+        - Concepts are HIGH-LEVEL ideas (e.g., 'Route Coverage', 'Booking Pattern', 'Crew Utilization'), NOT raw column names or data values.
         - derived_from lists the column(s) that evidence this concept.
         - Think about what business themes this table's data represents.
 
@@ -651,13 +651,13 @@ def validate_enrichments(
     enrichment_dump = json.dumps(enriched, indent=2)
 
     prompt = textwrap.dedent(f"""\
-    You are a senior data architect reviewing enrichment metadata for an IndiGo Airlines database.
+    You are a senior data architect reviewing enrichment metadata for an airlines database.
 
     Below is the enriched metadata for all tables. Review it for:
     1. Consistency: Are domains aligned? Are relationship types consistent across tables?
        (e.g., if table A says A→B is PART_OF, table B should acknowledge the inverse)
     2. Completeness: Are any obvious semantic relationships missing?
-    3. Quality: Are descriptions accurate, specific, and grounded in aviation/airline domain?
+    3. Quality: Are descriptions accurate, specific, and grounded in the airlines/aviation domain?
     4. Concepts: Does each table have 2-5 meaningful abstract concepts? Are concept names
        appropriately abstract (not raw column names)? Are derived_from columns correct?
 
@@ -757,7 +757,7 @@ def enrich_with_llm_advanced(
     if db_path is None:
         base_dir = os.path.dirname(os.path.abspath(__file__))
         project_root = os.path.dirname(base_dir)  # one level up from domain_graph/
-        db_path = os.path.join(project_root, "data", "manufacturing.db")
+        db_path = os.path.join(project_root, "source_data", "airlines.db")
 
     all_tables = list(schema.keys())
     tool = SQLDBQueryTool(db_path)
@@ -802,16 +802,16 @@ if __name__ == "__main__":
 
     base_dir = os.path.dirname(os.path.abspath(__file__))
     project_root = os.path.dirname(base_dir)  # one level up from domain_graph/
-    db_path = os.path.join(project_root, "data", "manufacturing.db")
+    db_path = os.path.join(project_root, "source_data", "airlines.db")
 
     print("=" * 70)
     print("  ADVANCED ENRICHMENT — ReAct Agent")
-    print("  IndiGo Airlines Fleet / Supply Chain")
+    print("  Airlines Database Schema Enrichment")
     print("=" * 70)
 
     if not os.path.exists(db_path):
         print(f"ERROR: Database not found at {db_path}")
-        print("Run 'python data/setup_db.py' first.")
+        print("Run 'python source_data/setup_new_db.py' first.")
         exit(1)
 
     print("\n[1] Introspecting schema...")
@@ -828,7 +828,7 @@ if __name__ == "__main__":
     print_enrichment(enriched)
 
     # Save trace to file for inspection
-    trace_path = os.path.join(project_root, "data", "enrichment_trace.json")
+    trace_path = os.path.join(project_root, "source_data", "enrichment_trace.json")
     with open(trace_path, "w") as f:
         json.dump(enriched, f, indent=2)
     print(f"\n  Saved enrichment to {trace_path}")

@@ -2,7 +2,7 @@
 lexical_graph.py — Layer 2: Lexical Graph (from Unstructured Data)
 
 Pipeline:
-  1. Load .txt documents from data/ directory
+  1. Load .txt documents from source_data/ directory
   2. Chunk documents internally (for LLM context window management)
   3. Embed chunks & store in LanceDB (local persistent vector DB for search)
   4. Extract ONE SPO (Subject–Predicate–Object) triplet per chunk via LLM
@@ -56,7 +56,7 @@ from utils.llm import (
 from utils.neo4j_helpers import get_neo4j_driver, run_cypher, run_cypher_write
 
 # ─── Configuration ───────────────────────────────────────────────────────────
-DATA_DIR = os.path.join(PROJECT_ROOT, "data")
+DATA_DIR = os.path.join(PROJECT_ROOT, "source_data")
 LANCEDB_DIR = os.path.join(DATA_DIR, "lancedb_store")
 TABLE_NAME = "lexical_chunks"
 
@@ -259,25 +259,25 @@ def extract_spo_triplets_simple(chunks: list[dict], llm_client) -> dict:
     spo_by_chunk = {}
 
     for chunk in chunks:
-        prompt = f"""You are an information extraction system analyzing IndiGo Airlines
-maintenance and quality review documents.
+        prompt = f"""You are an information extraction system analyzing airlines and aviation
+industry documents.
 
 Given the text chunk below, extract ONE SPO (Subject–Predicate–Object) triplet that
 best captures the core meaning of the entire chunk.
 
 Return a JSON object with these fields:
-- "subject": the main entity/concept (specific: e.g., "PW1100G engine" not just "engine")
-- "subject_type": one of: aircraft, assembly, part, supplier, person, event, metric, system, location
-- "predicate": the relationship/action connecting subject to object (e.g., "shows performance degradation in", "requires inspection of", "was supplied by")
+- "subject": the main entity/concept (specific: e.g., "Boeing 737 MAX" not just "aircraft", "JFK Airport" not just "airport")
+- "subject_type": one of: aircraft, flight, route, airport, crew, passenger, booking, fare_class, maintenance, incident, organization, person, event, metric, system, location, equipment, service
+- "predicate": the relationship/action connecting subject to object (e.g., "operates flights to", "reported delay at", "was assigned to", "requires maintenance for")
 - "object": the target entity/concept the subject relates to
-- "object_type": one of: aircraft, assembly, part, supplier, person, event, metric, system, location
+- "object_type": one of: aircraft, flight, route, airport, crew, passenger, booking, fare_class, maintenance, incident, organization, person, event, metric, system, location, equipment, service
 
 Rules:
 - Extract the SINGLE most important SPO triplet that summarizes what this chunk is about
 - Subject and object should be specific proper nouns or technical terms, not generic words
 - The predicate should be a concise verbal phrase that connects subject to object
 - Together, the triplet should capture the chunk's core message
-- Example: {{"subject": "PW1100G engine", "subject_type": "assembly", "predicate": "shows performance degradation in", "object": "high-altitude operations", "object_type": "event"}}
+- Example: {{"subject": "Flight AI-402", "subject_type": "flight", "predicate": "experienced diversion due to", "object": "engine vibration warning", "object_type": "incident"}}
 
 Text chunk:
 ---
@@ -428,10 +428,10 @@ def resolve_entities_across_documents(
     real-world entity across documents and normalize them to a canonical name.
 
     For example:
-      - "Collins Aerospace smoke detector" and "Collins Aerospace" → keep both,
-        but the parent entity "Collins Aerospace" should also be connected to
+      - "Boeing 737 engine" and "Boeing" → keep both,
+        but the parent entity "Boeing" should also be connected to
         documents that mention its products.
-      - "Passenger Experience Division, IndiGo Airlines" and "IndiGo Airlines"
+      - "Operations Division, Airline X" and "Airline X"
         → normalize to the more general form where appropriate.
 
     This function rewrites spo_by_chunk IN PLACE with normalized entity names
@@ -467,7 +467,7 @@ def resolve_entities_across_documents(
             print("    Too few entities for resolution, skipping.")
         return spo_by_chunk
 
-    prompt = f"""You are an entity resolution expert for IndiGo Airlines aviation maintenance documents.
+    prompt = f"""You are an entity resolution expert for airlines and aviation industry documents.
 
 Below is a list of entity names extracted from multiple documents, along with which
 documents they appear in.
@@ -478,10 +478,11 @@ name — prefer the shorter, more general form that people would commonly use.
 
 IMPORTANT RULES:
 - Only merge entities that truly refer to the same thing
-- "Collins Aerospace smoke detector" is a PRODUCT made by "Collins Aerospace" (the company).
-  These are different entities — do NOT merge them. But DO note the parent-child relationship.
-- When a specific product/part name contains a company name, the company itself should be
-  recognized as an entity mentioned in that document too.
+- A specific product/service and its parent organization are DIFFERENT entities — do NOT
+  merge them. But DO note the parent-child relationship.
+  (e.g., "Boeing 737 MAX" and "Boeing" are related but distinct entities)
+- When a specific entity name contains an organization name, the organization itself
+  should be recognized as an entity mentioned in that document too.
 - If an entity is unique and has no matches, leave it as-is (do not include it in groups)
 
 Entities:
@@ -1138,15 +1139,15 @@ def main():
     mode = "ReAct Agent" if args.advanced else "Single-shot LLM"
     print("=" * 70)
     print("  LAYER 2 — LEXICAL GRAPH BUILDER")
-    print("  IndiGo Airlines Unstructured Document Ontology")
+    print("  Airlines Unstructured Document Ontology")
     print(f"  Entity extraction mode: {mode}")
     print("=" * 70)
 
     # Step 1: Load documents
-    print("\n[Step 1] Loading documents from data/...")
+    print("\n[Step 1] Loading documents from source_data/...")
     documents = load_documents()
     if not documents:
-        print("  ERROR: No .txt files found in data/ directory.")
+        print("  ERROR: No .txt files found in source_data/ directory.")
         return
     print_documents(documents)
 
@@ -1212,11 +1213,11 @@ def main():
 
     # Step 7: Demo queries
     demo_questions = [
-        "What documents mention brake issues?",
-        "Which suppliers are discussed in reviews?",
-        "Tell me about engine performance problems",
-        "What quality issues are reported for the ATR fleet?",
-        "Landing gear maintenance concerns",
+        "What documents mention maintenance issues?",
+        "Which aircraft are discussed in reports?",
+        "Tell me about flight delay problems",
+        "What incidents are reported for recent operations?",
+        "Crew scheduling concerns",
     ]
     print("\n\n[Step 7] Running demo queries...")
     for q in demo_questions:

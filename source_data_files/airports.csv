@@ -1,0 +1,25 @@
+airport_id,iata_code,icao_code,name,city,state,country,latitude,longitude,elevation_ft,timezone
+A001,DEL,VIDP,Indira Gandhi International Airport,New Delhi,Delhi,India,28.5562,77.1000,777,Asia/Kolkata
+A002,BOM,VABB,Chhatrapati Shivaji Maharaj International Airport,Mumbai,Maharashtra,India,19.0896,72.8656,37,Asia/Kolkata
+A003,BLR,VOBL,Kempegowda International Airport,Bengaluru,Karnataka,India,13.1986,77.7066,3000,Asia/Kolkata
+A004,MAA,VOMM,Chennai International Airport,Chennai,Tamil Nadu,India,12.9900,80.1693,52,Asia/Kolkata
+A005,HYD,VOHS,Rajiv Gandhi International Airport,Hyderabad,Telangana,India,17.2313,78.4298,2024,Asia/Kolkata
+A006,CCU,VECC,Netaji Subhas Chandra Bose International Airport,Kolkata,West Bengal,India,22.6520,88.4463,16,Asia/Kolkata
+A007,AMD,VAAH,Sardar Vallabhbhai Patel International Airport,Ahmedabad,Gujarat,India,23.0772,72.6347,189,Asia/Kolkata
+A008,PNQ,VAPO,Pune Airport,Pune,Maharashtra,India,18.5822,73.9197,1942,Asia/Kolkata
+A009,GOI,VOGO,Goa International Airport,Panaji,Goa,India,15.3808,73.8314,150,Asia/Kolkata
+A010,COK,VOCI,Cochin International Airport,Kochi,Kerala,India,10.1520,76.4019,30,Asia/Kolkata
+A011,JAI,VIJP,Jaipur International Airport,Jaipur,Rajasthan,India,26.8242,75.8122,1263,Asia/Kolkata
+A012,LKO,VILK,Chaudhary Charan Singh International Airport,Lucknow,Uttar Pradesh,India,26.7606,80.8893,410,Asia/Kolkata
+A013,IXC,VICG,Chandigarh International Airport,Chandigarh,Punjab,India,30.6735,76.7885,1012,Asia/Kolkata
+A014,TRV,VOTV,Trivandrum International Airport,Thiruvananthapuram,Kerala,India,8.4821,76.9201,15,Asia/Kolkata
+A015,VNS,VIBN,Lal Bahadur Shastri International Airport,Varanasi,Uttar Pradesh,India,25.4523,82.8593,266,Asia/Kolkata
+A016,ATQ,VIAR,Sri Guru Ram Dass Jee International Airport,Amritsar,Punjab,India,31.7096,74.7973,756,Asia/Kolkata
+A017,BBI,VEBS,Biju Patnaik International Airport,Bhubaneswar,Odisha,India,20.2444,85.8178,138,Asia/Kolkata
+A018,GAU,VEGT,Lokpriya Gopinath Bordoloi International Airport,Guwahati,Assam,India,26.1061,91.5859,162,Asia/Kolkata
+A019,SXR,VISR,Sheikh ul Alam International Airport,Srinagar,Jammu & Kashmir,India,33.9871,74.7742,5404,Asia/Kolkata
+A020,DXB,OMDB,Dubai International Airport,Dubai,,UAE,25.2532,55.3657,62,Asia/Dubai
+A021,SIN,WSSS,Singapore Changi Airport,Singapore,,Singapore,1.3644,103.9915,22,Asia/Singapore
+A022,KTM,VNKT,Tribhuvan International Airport,Kathmandu,,Nepal,27.6966,85.3591,4390,Asia/Kathmandu
+A023,CMB,VCBI,Bandaranaike International Airport,Colombo,,Sri Lanka,7.1808,79.8841,30,Asia/Colombo
+A024,DAC,VGHS,Hazrat Shahjalal International Airport,Dhaka,,Bangladesh,23.8433,90.3978,30,Asia/Dhaka

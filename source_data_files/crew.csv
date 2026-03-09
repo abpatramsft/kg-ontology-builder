@@ -1,0 +1,26 @@
+crew_id,first_name,last_name,role,employee_id,license_number,base_airport_id,years_experience,nationality,date_of_birth,join_date,qualification
+CR001,Capt. Anil,Kapoor,Pilot-in-Command,EMP10001,DGCA-ATP-10001,A001,22,Indian,1972-04-15,2002-07-01,ATPL
+CR002,Capt. Sundar,Raman,Pilot-in-Command,EMP10002,DGCA-ATP-10002,A002,18,Indian,1976-09-22,2006-03-14,ATPL
+CR003,F/O Priti,Menon,First Officer,EMP10003,DGCA-CPL-10003,A001,8,Indian,1986-06-11,2016-02-28,CPL
+CR004,F/O Sanjay,Trivedi,First Officer,EMP10004,DGCA-CPL-10004,A003,6,Indian,1988-03-05,2018-05-19,CPL
+CR005,Capt. Geeta,Sharma,Pilot-in-Command,EMP10005,DGCA-ATP-10005,A004,15,Indian,1979-11-30,2009-08-12,ATPL
+CR006,F/O Rajan,Pillai,First Officer,EMP10006,DGCA-CPL-10006,A002,5,Indian,1990-01-20,2019-10-01,CPL
+CR007,Capt. Harish,Nambiar,Pilot-in-Command,EMP10007,DGCA-ATP-10007,A005,20,Indian,1974-07-08,2004-01-15,ATPL
+CR008,F/O Anita,Bhat,First Officer,EMP10008,DGCA-CPL-10008,A001,4,Indian,1992-05-27,2020-06-10,CPL
+CR009,Capt. Vinay,Sood,Training Captain,EMP10009,DGCA-ATP-10009,A001,25,Indian,1969-12-14,1999-03-20,ATPL+TRE
+CR010,F/O Pooja,Agarwal,First Officer,EMP10010,DGCA-CPL-10010,A006,3,Indian,1993-09-16,2021-07-05,CPL
+CR011,Kavitha,Nair,Cabin Crew Chief,EMP20001,,A002,12,Indian,1982-02-18,2012-04-10,Cabin Senior
+CR012,Roshni,Das,Senior Cabin Crew,EMP20002,,A001,9,Indian,1985-08-03,2015-08-22,Cabin Senior
+CR013,Manoj,Yadav,Senior Cabin Crew,EMP20003,,A003,7,Indian,1987-04-29,2017-03-14,Cabin
+CR014,Preeti,Chopra,Cabin Crew,EMP20004,,A001,4,Indian,1991-11-10,2020-02-01,Cabin
+CR015,Vijay,Thomas,Cabin Crew,EMP20005,,A004,5,Indian,1990-07-25,2019-06-15,Cabin
+CR016,Swati,Bhatt,Cabin Crew,EMP20006,,A002,3,Indian,1994-03-12,2021-09-07,Cabin
+CR017,Lokesh,Naidu,Cabin Crew,EMP20007,,A005,6,Indian,1989-01-22,2018-04-20,Cabin
+CR018,Sheena,Francis,Cabin Crew,EMP20008,,A001,2,Indian,1996-10-05,2022-11-14,Cabin
+CR019,Abhishek,Roy,Cabin Crew,EMP20009,,A006,4,Indian,1992-06-30,2020-08-25,Cabin
+CR020,Monica,Bhargava,Senior Cabin Crew,EMP20010,,A001,10,Indian,1984-09-17,2014-05-19,Cabin Senior
+CR021,Capt. Ritu,Verma,Pilot-in-Command,EMP10011,DGCA-ATP-10011,A001,16,Indian,1978-05-14,2008-11-03,ATPL
+CR022,F/O Deepak,Sinha,First Officer,EMP10012,DGCA-CPL-10012,A002,7,Indian,1987-02-28,2017-08-12,CPL
+CR023,Capt. Jayesh,Patil,Pilot-in-Command,EMP10013,DGCA-ATP-10013,A003,19,Indian,1975-10-11,2005-06-01,ATPL
+CR024,F/O Nisha,Menon,First Officer,EMP10014,DGCA-CPL-10014,A004,5,Indian,1991-07-19,2019-12-09,CPL
+CR025,Harsha,Lakshminarayan,Cabin Crew Chief,EMP20011,,A003,11,Indian,1983-04-25,2013-07-16,Cabin Senior
