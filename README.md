@@ -134,6 +134,8 @@ docker run -d --name neo4j-kg \
 
 The project uses **Azure OpenAI GPT-4.1** via `DefaultAzureCredential` (your `az login` session). No API keys in code.
 
+> **Important:** Update the constants at the top of `src/utils/llm.py` (`LLM_ENDPOINT`, `EMBEDDING_ENDPOINT`, `API_VERSION`, `LLM_MODEL`, etc.) to match your own Azure OpenAI resource endpoints and model deployments.
+
 ```bash
 az login
 ```

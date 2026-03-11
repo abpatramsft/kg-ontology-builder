@@ -9,26 +9,33 @@ from openai import AzureOpenAI
 from azure.identity import DefaultAzureCredential, get_bearer_token_provider
 
 
+# ─── Constants (update these for your environment) ─────────────────────────
+LLM_ENDPOINT = "https://abpatra-7946-resource.openai.azure.com/"
+EMBEDDING_ENDPOINT = "https://abpatra-7946-resource.cognitiveservices.azure.com/"
+API_VERSION = "2024-02-15-preview"
+TOKEN_SCOPE = "https://cognitiveservices.azure.com/.default"
+LLM_MODEL = "gpt-4.1"
+EMBEDDING_MODEL = "text-embedding-3-small"
+EMBEDDING_BATCH_SIZE = 16
+
+
 # ─── LLM (Chat Completions) ────────────────────────────────────────────────
 
 def get_llm_client() -> AzureOpenAI:
-    """Create an Azure OpenAI client for chat completions (GPT-4.1)."""
-    endpoint = "https://abpatra-7946-resource.openai.azure.com/"
+    """Create an Azure OpenAI client for chat completions."""
     credential = DefaultAzureCredential()
-    token_provider = get_bearer_token_provider(
-        credential, "https://cognitiveservices.azure.com/.default"
-    )
+    token_provider = get_bearer_token_provider(credential, TOKEN_SCOPE)
     return AzureOpenAI(
-        azure_endpoint=endpoint,
+        azure_endpoint=LLM_ENDPOINT,
         azure_ad_token_provider=token_provider,
-        api_version="2024-02-15-preview",
+        api_version=API_VERSION,
     )
 
 
 def call_llm(client: AzureOpenAI, prompt: str, temperature: float = 0.3) -> str:
     """Send a prompt to GPT-4.1 and return the response text."""
     completion = client.chat.completions.create(
-        model="gpt-4.1",
+        model=LLM_MODEL,
         messages=[{"role": "user", "content": prompt}],
         temperature=temperature,
     )
@@ -66,20 +73,14 @@ def parse_llm_json(response: str) -> dict | list | None:
 # ─── Embeddings ─────────────────────────────────────────────────────────────
 
 def get_embedding_client() -> AzureOpenAI:
-    """Create an Azure OpenAI client for embeddings (text-embedding-3-small)."""
-    endpoint = "https://abpatra-7946-resource.cognitiveservices.azure.com/"
+    """Create an Azure OpenAI client for embeddings."""
     credential = DefaultAzureCredential()
-    token_provider = get_bearer_token_provider(
-        credential, "https://cognitiveservices.azure.com/.default"
-    )
+    token_provider = get_bearer_token_provider(credential, TOKEN_SCOPE)
     return AzureOpenAI(
-        azure_endpoint=endpoint,
+        azure_endpoint=EMBEDDING_ENDPOINT,
         azure_ad_token_provider=token_provider,
-        api_version="2024-02-15-preview",
+        api_version=API_VERSION,
     )
-
-
-EMBEDDING_MODEL = "text-embedding-3-small"
 
 
 def embed_texts(client: AzureOpenAI, texts: list[str]) -> list[list[float]]:
@@ -88,9 +89,8 @@ def embed_texts(client: AzureOpenAI, texts: list[str]) -> list[list[float]]:
     Batches in groups of 16 to stay within token limits.
     """
     all_embeddings = []
-    batch_size = 16
-    for i in range(0, len(texts), batch_size):
-        batch = texts[i : i + batch_size]
+    for i in range(0, len(texts), EMBEDDING_BATCH_SIZE):
+        batch = texts[i : i + EMBEDDING_BATCH_SIZE]
         response = client.embeddings.create(model=EMBEDDING_MODEL, input=batch)
         all_embeddings.extend([item.embedding for item in response.data])
     return all_embeddings
