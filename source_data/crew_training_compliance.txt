@@ -1,0 +1,93 @@
+IndiGo Airlines — Crew Training & Compliance Report (H1 2024)
+================================================================
+
+Prepared by: Flight Safety & Training Department, IndiGo Airlines
+Review Period: January – June 2024
+Classification: Internal Use Only
+
+Recurrent Training Overview
+-----------------------------
+
+A total of 34 crew training events were conducted during the first half of 2024 across
+IndiGo's three primary training centres: the Full Flight Simulator Complex at DEL (TC-DEL),
+the Cabin Emergency Trainer facility at BOM (TC-BOM), and the Computer-Based Training hub
+at BLR (TC-BLR).
+
+Captain Anil Kapoor (CR001, EMP10001) completed his biannual Line Proficiency Check (LPC)
+on the A320 type rating on March 12, 2024 at TC-DEL. His simulator session included an
+engine-out approach into Goa (GOI, Dabolim Airport) replicating the crosswind conditions
+documented in flight F010's hydraulic incident (I005, January 15). The training examiner
+noted excellent CRM and decision-making under asymmetric thrust conditions. Capt. Kapoor's
+next LPC is due September 2024.
+
+First Officer Priya Nair (CR002, EMP10002) underwent her Command Upgrade Assessment (CUA)
+preparatory module in April 2024. The four-day programme at TC-DEL covered V1 cut
+procedures, GPWS escape manoeuvres, and non-precision approaches into terrain-challenging
+airports such as Rajiv Gandhi International (HYD) and Cochin International (COK). Her
+performance was rated "Above Standard" — she is now cleared for the formal command upgrade
+evaluation scheduled in Q2 2025 as noted by Network Operations.
+
+Senior Cabin Crew Rahul Verma (CR006, EMP10006) completed the annual Safety Equipment &
+Procedure (SEP) recurrent training at TC-BOM in February 2024. The session included live
+raft deployment, fire suppression drill, and a scenario based on the bird strike incident
+I003 (January 15, AC005/VT-INE) where cabin crew must manage passenger anxiety during an
+unplanned diversion. Verma scored 94% on the written assessment and received special
+commendation for leadership during the evacuation drill.
+
+Incident-Triggered Training
+------------------------------
+
+Following the hydraulic leak incident I005 on aircraft AC010 (VT-INJ), an Operational
+Safety Bulletin (OSB-2024-007) was issued on February 1, 2024. All A320 pilots received a
+mandatory 2-hour eLearning module covering hydraulic system architecture, failure mode
+identification, and the revised Hydraulic System Abnormal checklist. Completion was tracked
+via the Learning Management System (LMS-6E), and 100% compliance was achieved by February
+28, 2024.
+
+The bird strike incident I003 prompted a refresher module on Bird Strike Avoidance and
+Post-Impact Procedures for all DEL and BLR-based crews. The module referenced AC005's radome
+damage and the subsequent 2-day grounding, emphasising the importance of accurate pilot
+reports for maintenance decision-making. Training record TR-2024-019 confirms 98% completion
+among the target crew population, with two members (both on medical leave) scheduled for
+make-up sessions in March.
+
+Type Rating & Fleet Transition
+-------------------------------
+
+With the planned induction of three additional ATR 72-600 aircraft by Q3 2024, a batch of
+eight pilots commenced ATR type-rating conversion at the ATR Training Centre in Toulouse
+(TC-TLS) in May 2024. The cohort includes four pilots transitioning from the A320 fleet,
+requiring a 6-week bridge course covering differences in fly-by-wire vs. conventional
+controls, propeller handling, and short-field operations typical of IndiGo's regional
+network serving airports like HYD and Vizag (VTZ).
+
+Technician Certification
+--------------------------
+
+Maintenance technician TEC003, who supervised the engine hot section inspection on AC003
+(VT-INC, M003) at Pratt & Whitney MRO-SIN, completed an advanced PW1100G-JM engine module
+course in April 2024. This certification enables TEC003 to independently sign off on borescope
+inspections and turbine blade replacements without MRO facility supervision, reducing future
+turnaround times for engine events on the A321neo sub-fleet.
+
+Technician TEC007 (assigned to IndiGo Hangar-HYD) attained certification on the ATR 72-600
+PW127M powerplant after completing the 120-hour practical module. This directly supports
+the planned A-Check schedule for aircraft AC015 (VT-INO), whose next inspection falls on
+April 14, 2024 as noted in the maintenance log M005.
+
+DGCA Audit Readiness
+-----------------------
+
+IndiGo's training compliance score, as measured against DGCA CAR Section 7 Series M Part I,
+stood at 99.2% at the end of June 2024. The only gap identified was a 3-day overdue
+Dangerous Goods Awareness refresher for two ground handling staff at Kempegowda
+International Airport (BLR). Corrective action was completed by June 18, and the finding
+was downgraded from "Level 2" to "Observation" during the DGCA surveillance audit on
+June 25, 2024.
+
+The Safety Management System (SMS) team flagged 12 Voluntary Safety Reports (VSR) during
+H1 2024. Three reports were directly linked to ATC congestion at DEL — corroborating the
+trend documented in incident I001 (ATC slot delays during peak morning banks at Indira
+Gandhi International Airport). These reports informed a proposal to adjust the DEL departure
+schedule by shifting two early-morning flights (including 6E-201 on the DEL-BOM route) by
+15 minutes to reduce slot conflict probability.

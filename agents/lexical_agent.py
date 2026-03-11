@@ -1,10 +1,16 @@
 """
-enrich_advanced.py — Advanced ReAct Agent-based SPO Triplet Extraction for Layer 2
+enrich_advanced.py — Advanced ReAct Agent-based Abstract SPO Triplet Extraction for Layer 2
 
 Instead of a single LLM call per chunk (lexical_graph.extract_spo_triplets_simple),
 this module uses a custom ReAct agent that iteratively explores the document
 landscape via a VectorDB query tool (LanceDB) to build richer, more accurate
-SPO triplet extractions with cross-chunk awareness.
+ABSTRACT / ONTOLOGY-LEVEL SPO triplet extractions with cross-chunk awareness.
+
+Key design principle: Subjects and objects are ABSTRACT CATEGORIES, ROLES, or
+CONCEPT CLASSES — never specific proper nouns or instance-level identifiers.
+For example, "Anil Kumar" becomes "Pilot", "VT-ANQ" becomes "Narrow-Body Aircraft",
+"JFK" becomes "Hub Airport". This produces a conceptual ontology rather than
+a factual knowledge graph of specific events.
 
 Architecture:
   ┌──────────────────────────────────────────────────────────────┐
@@ -344,13 +350,28 @@ class LexicalEnrichmentAgent:
         You are a senior information extraction agent analyzing airlines and aviation
         industry documents.
 
-        Your task: Extract ONE SPO (Subject–Predicate–Object) triplet per chunk
-        from the document "{self.doc_name}" using the document chunks stored in a
-        vector database. Each triplet should capture the core meaning of a chunk.
+        Your task: Extract ONE **abstract, ontology-level** SPO (Subject–Predicate–Object)
+        triplet per chunk from the document "{self.doc_name}" using the document chunks
+        stored in a vector database. Each triplet should capture the **conceptual meaning**
+        of a chunk — NOT specific instances or proper nouns.
+
+        CRITICAL DISTINCTION:
+        - WRONG (instance-level): "Anil Kumar" → reported → "redeye flight 302"
+        - RIGHT (concept-level):  "Pilot" → reports → "Night Flight Operations"
+
+        - WRONG: "Boeing 737-800 VT-ANQ" → experienced → "engine failure on 2024-03-15"
+        - RIGHT: "Narrow-Body Aircraft" → experiences → "Engine Failure Incidents"
+
+        - WRONG: "JFK Airport" → delayed → "Flight AA-1023"
+        - RIGHT: "Hub Airport" → causes delays for → "Domestic Flights"
+
+        Think of this as building an **ontology / conceptual schema** for the aviation
+        domain, NOT a factual knowledge graph of specific events. Subjects and objects
+        should be abstract categories, roles, or concept classes.
 
         You work in a ReAct loop — you THINK, then ACT (use a tool to explore
         the document chunks), then OBSERVE the result, and repeat until you have
-        a precise SPO triplet for every chunk.
+        an abstract conceptual SPO triplet for every chunk.
 
         ── YOUR TOOL ──────────────────────────────────────────────────────────
         {self.tool.TOOL_DESCRIPTION}
@@ -378,38 +399,53 @@ class LexicalEnrichmentAgent:
 
         {{
           "<chunk_id>": {{
-            "subject": "<main entity — specific, not generic>",
-            "subject_type": "<one of: aircraft, flight, route, airport, crew, passenger, booking, fare_class, maintenance, incident, organization, person, event, metric, system, location, equipment, service>",
-            "predicate": "<relationship/action connecting subject to object>",
-            "object": "<target entity the subject relates to>",
-            "object_type": "<one of: aircraft, flight, route, airport, crew, passenger, booking, fare_class, maintenance, incident, organization, person, event, metric, system, location, equipment, service>"
+            "subject": "<abstract category, role, or concept class — NOT a specific name/identifier>",
+            "subject_type": "<one of: aircraft, flight, route, airport, crew, passenger, booking, fare_class, maintenance, incident, organization, person, event, metric, system, location, equipment, service, process, policy, regulation>",
+            "predicate": "<conceptual relationship connecting subject concept to object concept>",
+            "object": "<abstract category, role, or concept class — NOT a specific name/identifier>",
+            "object_type": "<one of: aircraft, flight, route, airport, crew, passenger, booking, fare_class, maintenance, incident, organization, person, event, metric, system, location, equipment, service, process, policy, regulation>"
           }},
           ... (one key per chunk_id from: {chunk_ids})
         }}
 
         ── EXTRACTION RULES ───────────────────────────────────────────────────
 
-        - Extract ONE SPO triplet per chunk that captures the chunk's core meaning
-        - Subject and object should be specific proper nouns or technical terms
-        - The predicate should be a concise verbal phrase (e.g., "shows performance degradation in",
-          "requires inspection of", "was supplied by")
-        - Together, the triplet should tell what the chunk is mainly about
-        - Use cross-chunk context to choose the most informative subject/object
+        - Extract ONE abstract/conceptual SPO triplet per chunk that captures the
+          chunk's thematic meaning at an **ontology level**
+        - Subject and object must be ABSTRACT CATEGORIES, ROLES, or CONCEPT CLASSES
+          — NEVER specific proper nouns, individual names, flight numbers, dates,
+          serial numbers, or instance-level identifiers
+        - Abstraction examples:
+            • Person names ("Anil Kumar", "Jane Smith") → their ROLE ("Pilot", "Maintenance Engineer", "Passenger")
+            • Specific aircraft ("VT-ANQ", "Boeing 737-800 MSN 29019") → class ("Narrow-Body Aircraft", "Commercial Aircraft")
+            • Specific flights ("AI-302", "Flight 1023") → category ("Domestic Flight", "Long-Haul Flight", "Night Flight")
+            • Specific airports ("JFK", "DEL") → role ("Hub Airport", "International Airport", "Origin Airport")
+            • Specific dates/incidents → pattern ("Recurring Maintenance Issue", "Weather Disruption Event")
+            • Specific metrics ("87.3% OTP") → concept ("On-Time Performance Metric")
+        - The predicate should be a concise, reusable verbal phrase describing the
+          conceptual relationship (e.g., "undergoes", "impacts", "requires",
+          "is governed by", "contributes to", "triggers")
+        - Together, the triplet should describe a GENERAL PATTERN or CONCEPTUAL
+          RELATIONSHIP that the chunk illustrates — not the specific facts in it
+        - Use cross-chunk context to identify recurring themes and abstract them
         - Ground entity types in the airlines and aviation domain
-        - IMPORTANT: Use CONSISTENT entity names across chunks and documents!
-          If an entity appears in other documents, use that exact name
-          rather than abbreviations or alternate forms.
-          The goal is to create shared entities that link documents together.
+        - IMPORTANT: Use CONSISTENT abstract concept names across chunks and documents!
+          If a concept appears in other documents, use the same abstract label.
+          The goal is to create a shared conceptual ontology that links documents together.
 
         ── STRATEGY ───────────────────────────────────────────────────────────
 
         1. Start by reading each chunk's full text (use get_chunk or get_chunks_by_doc)
         2. CRITICAL: Use search_similar to find related chunks in OTHER documents!
-           Search for key entities (airline names, aircraft models, airports, routes) to see
-           how they appear in the broader corpus. This ensures consistent naming.
-        3. Determine the single best SPO triplet for each chunk
-        4. When confident, produce FINAL_ANSWER with one SPO per chunk_id
-        5. Aim for 4-8 exploration steps — at least 1-2 should be search_similar calls.
+           Search for key THEMES (maintenance patterns, operational issues, crew roles,
+           fleet management) to understand the conceptual landscape across the corpus.
+           This ensures you pick the right abstract categories.
+        3. For each chunk, identify the ABSTRACT THEME — what general concept or
+           pattern does this chunk illustrate? Elevate specific facts to their
+           conceptual category.
+        4. Determine the single best abstract/conceptual SPO triplet for each chunk
+        5. When confident, produce FINAL_ANSWER with one conceptual SPO per chunk_id
+        6. Aim for 4-8 exploration steps — at least 1-2 should be search_similar calls.
         """)
 
         self.messages.append({"role": "system", "content": system})
@@ -419,12 +455,17 @@ class LexicalEnrichmentAgent:
         Begin your analysis of the document "{self.doc_name}".
 
         Start by reading the full text of each chunk to understand the content.
-        Then IMPORTANT: use search_similar to search for key entities (like airline
-        names, aircraft types, airports, routes, crew, incidents) across ALL documents
-        in the vector DB. This helps you use consistent entity names that match
-        other documents.
+        Then IMPORTANT: use search_similar to search for key THEMES and CONCEPTS
+        (like maintenance patterns, crew roles, operational metrics, fleet management,
+        safety incidents, route planning) across ALL documents in the vector DB.
+        This helps you identify the right abstract categories and ensures conceptual
+        consistency across documents.
 
-        Produce ONE SPO (Subject–Predicate–Object) triplet per chunk.
+        Remember: extract ABSTRACT, ONTOLOGY-LEVEL triplets — not instance-level facts.
+        Replace specific names, numbers, and identifiers with their conceptual roles
+        or categories.
+
+        Produce ONE abstract SPO (Subject–Predicate–Object) triplet per chunk.
         """)
         self.messages.append({"role": "user", "content": prompt})
 
@@ -643,18 +684,23 @@ def validate_extraction(
         chunk_previews[c["chunk_id"]] = c["text"][:200]
 
     prompt = textwrap.dedent(f"""\
-    You are a senior reviewer validating SPO (Subject-Predicate-Object) triplet
-    extractions from airlines and aviation industry documents.
+    You are a senior reviewer validating ABSTRACT / ONTOLOGY-LEVEL SPO
+    (Subject-Predicate-Object) triplet extractions from airlines and aviation
+    industry documents.
 
     Below are the extracted SPO triplets per chunk, along with chunk text previews.
     Review for:
-    1. Accuracy: Does each triplet capture the core meaning of its chunk?
-    2. Specificity: Are subjects and objects specific (proper nouns / technical terms),
-       not generic words?
-    3. Consistency: Are the same entities named consistently across chunks?
-       (e.g., "Boeing 737" and "B737" should be normalized to one form)
+    1. Abstraction level: Are subjects and objects ABSTRACT CATEGORIES, ROLES, or
+       CONCEPT CLASSES — NOT specific proper nouns, individual names, flight numbers,
+       dates, or instance-level identifiers? If you see specific names like
+       "Anil Kumar", "VT-ANQ", "Flight AI-302", "JFK" etc., replace them with their
+       abstract role ("Pilot", "Narrow-Body Aircraft", "Domestic Flight", "Hub Airport").
+    2. Conceptual accuracy: Does each triplet capture the THEMATIC / CONCEPTUAL
+       meaning of its chunk (the general pattern), not just the literal facts?
+    3. Consistency: Are the same abstract concepts named consistently across chunks?
+       (e.g., "Aircraft Maintenance" and "Plane Servicing" should be unified)
     4. Type accuracy: Are entity types correct?
-       (e.g., an airline name should be "organization" not "person")
+       (e.g., a role like "Pilot" should be "crew" not "person")
 
     Chunk previews:
     {json.dumps(chunk_previews, indent=2)}
@@ -719,13 +765,17 @@ def extract_spo_triplets_advanced(
     validate: bool = True,
 ) -> dict:
     """
-    Advanced SPO triplet extraction using a ReAct agent per document.
+    Advanced abstract/ontology-level SPO triplet extraction using a ReAct agent per document.
 
     Same output contract as lexical_graph.extract_spo_triplets_simple — returns
     {chunk_id: {"subject", "subject_type", "predicate", "object", "object_type"}}.
 
+    Subjects and objects are ABSTRACT CATEGORIES / ROLES / CONCEPT CLASSES,
+    not specific proper nouns or instance-level identifiers. This produces
+    a conceptual ontology graph rather than a factual knowledge graph.
+
     The agent can explore the LanceDB table to find cross-references
-    and build more accurate SPO triplets.
+    and build more accurate abstract SPO triplets.
 
     Args:
         chunks:           List of chunk dicts (chunk_id, doc_name, text, index).

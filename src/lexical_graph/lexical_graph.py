@@ -244,8 +244,10 @@ def store_chunks_in_vectordb(
 
 def extract_spo_triplets_simple(chunks: list[dict], llm_client) -> dict:
     """
-    For each chunk, call LLM to extract a single SPO (Subject–Predicate–Object)
-    triplet that captures the core meaning of the chunk.
+    For each chunk, call LLM to extract a single abstract, ontology-level SPO
+    (Subject–Predicate–Object) triplet that captures the conceptual/thematic
+    meaning of the chunk. Subjects and objects are abstract categories, roles,
+    or concept classes — never specific proper nouns or instance identifiers.
 
     Returns:
         {
@@ -263,24 +265,37 @@ def extract_spo_triplets_simple(chunks: list[dict], llm_client) -> dict:
 
     for chunk in chunks:
         prompt = f"""You are an information extraction system analyzing airlines and aviation
-industry documents.
+industry documents. Your goal is to build an ABSTRACT ONTOLOGY — a conceptual schema
+of the aviation domain — NOT a factual knowledge graph of specific events.
 
-Given the text chunk below, extract ONE SPO (Subject–Predicate–Object) triplet that
-best captures the core meaning of the entire chunk.
+Given the text chunk below, extract ONE abstract, ontology-level SPO
+(Subject–Predicate–Object) triplet that captures the CONCEPTUAL / THEMATIC meaning
+of the entire chunk.
 
 Return a JSON object with these fields:
-- "subject": the main entity/concept (specific: e.g., "Boeing 737 MAX" not just "aircraft", "JFK Airport" not just "airport")
-- "subject_type": one of: aircraft, flight, route, airport, crew, passenger, booking, fare_class, maintenance, incident, organization, person, event, metric, system, location, equipment, service
-- "predicate": the relationship/action connecting subject to object (e.g., "operates flights to", "reported delay at", "was assigned to", "requires maintenance for")
-- "object": the target entity/concept the subject relates to
-- "object_type": one of: aircraft, flight, route, airport, crew, passenger, booking, fare_class, maintenance, incident, organization, person, event, metric, system, location, equipment, service
+- "subject": an ABSTRACT CATEGORY, ROLE, or CONCEPT CLASS — NEVER a specific proper noun,
+  individual name, flight number, date, or instance-level identifier.
+  Abstraction examples:
+    Person names ("Anil Kumar") → their ROLE ("Pilot", "Maintenance Engineer")
+    Specific aircraft ("VT-ANQ", "Boeing 737-800 MSN 29019") → class ("Narrow-Body Aircraft")
+    Specific flights ("AI-302") → category ("Domestic Flight", "Long-Haul Flight")
+    Specific airports ("JFK", "DEL") → role ("Hub Airport", "International Airport")
+    Specific dates/incidents → pattern ("Recurring Maintenance Issue")
+    Specific metrics ("87.3% OTP") → concept ("On-Time Performance Metric")
+- "subject_type": one of: aircraft, flight, route, airport, crew, passenger, booking, fare_class, maintenance, incident, organization, person, event, metric, system, location, equipment, service, process, policy, regulation
+- "predicate": a conceptual relationship connecting subject to object (e.g., "undergoes",
+  "impacts", "requires", "is governed by", "contributes to", "triggers")
+- "object": an ABSTRACT CATEGORY, ROLE, or CONCEPT CLASS (same rules as subject)
+- "object_type": one of: aircraft, flight, route, airport, crew, passenger, booking, fare_class, maintenance, incident, organization, person, event, metric, system, location, equipment, service, process, policy, regulation
 
 Rules:
-- Extract the SINGLE most important SPO triplet that summarizes what this chunk is about
-- Subject and object should be specific proper nouns or technical terms, not generic words
-- The predicate should be a concise verbal phrase that connects subject to object
-- Together, the triplet should capture the chunk's core message
-- Example: {{"subject": "Flight AI-402", "subject_type": "flight", "predicate": "experienced diversion due to", "object": "engine vibration warning", "object_type": "incident"}}
+- Extract the SINGLE most important abstract SPO triplet that summarizes what
+  general pattern or conceptual relationship this chunk illustrates
+- Subject and object must be ABSTRACT — never specific names, IDs, or instance data
+- The predicate should be a concise, reusable conceptual verb phrase
+- Together, the triplet should describe a GENERAL PATTERN, not specific facts
+- WRONG example: {{"subject": "Flight AI-402", "predicate": "experienced diversion due to", "object": "engine vibration warning"}}
+- RIGHT example: {{"subject": "Domestic Flight", "subject_type": "flight", "predicate": "experiences diversion due to", "object": "Engine Monitoring Alert", "object_type": "incident"}}
 
 Text chunk:
 ---
@@ -427,21 +442,20 @@ def resolve_entities_across_documents(
     verbose: bool = True,
 ) -> dict:
     """
-    LLM-based entity resolution: find subjects/objects that refer to the same
-    real-world entity across documents and normalize them to a canonical name.
+    LLM-based concept resolution: find abstract subjects/objects that refer to
+    the same conceptual category across documents and normalize them to a
+    canonical name.
 
     For example:
-      - "Boeing 737 engine" and "Boeing" → keep both,
-        but the parent entity "Boeing" should also be connected to
-        documents that mention its products.
-      - "Operations Division, Airline X" and "Airline X"
-        → normalize to the more general form where appropriate.
+      - "Aircraft Maintenance" and "Plane Servicing" → unify to one term
+      - "Engine Maintenance" implies parent concept "Aircraft Maintenance"
+      - Any residual instance-level names are elevated to abstract categories
 
-    This function rewrites spo_by_chunk IN PLACE with normalized entity names
+    This function rewrites spo_by_chunk IN PLACE with normalized concept names
     so that deduplicate_spo_triplets will merge them into shared nodes.
 
     Returns:
-        Updated spo_by_chunk dict with normalized entity names.
+        Updated spo_by_chunk dict with normalized concept names.
     """
     if verbose:
         print("\n  [Entity Resolution] Resolving entities across documents...")
@@ -470,42 +484,48 @@ def resolve_entities_across_documents(
             print("    Too few entities for resolution, skipping.")
         return spo_by_chunk
 
-    prompt = f"""You are an entity resolution expert for airlines and aviation industry documents.
+    prompt = f"""You are a concept resolution expert for an abstract aviation ontology.
 
-Below is a list of entity names extracted from multiple documents, along with which
-documents they appear in.
+Below is a list of ABSTRACT CONCEPT names (categories, roles, concept classes) extracted
+from multiple aviation industry documents, along with which documents they appear in.
 
-TASK: Identify groups of entities that refer to the SAME real-world entity or concept
+These are ontology-level concepts (e.g., "Fleet Operations", "Crew Scheduling",
+"Narrow-Body Aircraft"), NOT specific instance-level entities.
+
+TASK: Identify groups of concepts that refer to the SAME abstract category or concept
 (just named differently across documents). For each group, choose the best canonical
-name — prefer the shorter, more general form that people would commonly use.
+name — prefer the clearer, more standard domain term.
 
 IMPORTANT RULES:
-- Only merge entities that truly refer to the same thing
-- A specific product/service and its parent organization are DIFFERENT entities — do NOT
-  merge them. But DO note the parent-child relationship.
-  (e.g., "Boeing 737 MAX" and "Boeing" are related but distinct entities)
-- When a specific entity name contains an organization name, the organization itself
-  should be recognized as an entity mentioned in that document too.
-- If an entity is unique and has no matches, leave it as-is (do not include it in groups)
+- Only merge concepts that truly refer to the same abstract category
+- A broader concept and a narrower sub-concept are DIFFERENT — do NOT merge them.
+  But DO note the parent-child (broader/narrower) relationship.
+  (e.g., "Aircraft Maintenance" and "Engine Maintenance" are related but distinct)
+- When a specific sub-concept implies a broader parent concept, the parent concept
+  should be recognized as implicitly present in that document too.
+- If a concept is unique and has no matches, leave it as-is (do not include it in groups)
+- If you see any SPECIFIC proper nouns or instance-level names that slipped through
+  (e.g., "Anil Kumar", "VT-ANQ", "Flight AI-302"), replace them with their abstract
+  category in the canonical_name (e.g., "Pilot", "Narrow-Body Aircraft", "Domestic Flight")
 
-Entities:
+Concepts:
 {json.dumps(entity_list, indent=2)}
 
 Respond with a JSON object:
 {{
   "merge_groups": [
     {{
-      "canonical_name": "<best name to use>",
-      "canonical_type": "<entity type>",
+      "canonical_name": "<best abstract concept name to use>",
+      "canonical_type": "<concept type>",
       "variants": ["<name1>", "<name2>", ...],
-      "reason": "<why these are the same entity>"
+      "reason": "<why these are the same concept>"
     }}
   ],
   "implicit_mentions": [
     {{
-      "parent_entity": "<company/org name that is implicitly mentioned>",
-      "parent_type": "<entity type>",
-      "because_of": "<the product/part name that implies this parent>",
+      "parent_entity": "<broader concept that is implicitly present>",
+      "parent_type": "<concept type>",
+      "because_of": "<the narrower concept that implies this parent>",
       "in_document": "<document name>"
     }}
   ]
