@@ -25,7 +25,7 @@ if BASE_DIR not in sys.path:
 
 from agent_inference import InferenceAgent, build_tools
 from utils.llm import get_llm_client, get_embedding_client
-from utils.neo4j_helpers import get_neo4j_driver, run_cypher
+from utils.cosmos_helpers import get_gremlin_client, run_gremlin
 
 import lancedb
 
@@ -145,14 +145,14 @@ def setup():
     print_header()
     print("\n  Connecting to data sources...\n")
 
-    # Neo4j
-    driver = get_neo4j_driver()
+    # Cosmos DB
+    driver = get_gremlin_client()
     try:
-        run_cypher(driver, "RETURN 1 AS ok")
-        print_connection_status("Neo4j", True, "bolt://localhost:7687")
+        run_gremlin(driver, "g.V().limit(1).count()")
+        print_connection_status("Cosmos DB (Gremlin)", True, "indigokg/knowledgegraph")
     except Exception as e:
-        print_connection_status("Neo4j", False, str(e))
-        print("\n  ERROR: Neo4j must be running. Start it with:  docker compose up -d")
+        print_connection_status("Cosmos DB (Gremlin)", False, str(e))
+        print("\n  ERROR: Check COSMOS_DB_KEY in your .env file.")
         sys.exit(1)
 
     # LanceDB

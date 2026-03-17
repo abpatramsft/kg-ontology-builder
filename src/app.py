@@ -33,7 +33,7 @@ from agents.inference_agent import (
     build_tools,
 )
 from utils.llm import get_llm_client, get_embedding_client, embed_texts
-from utils.neo4j_helpers import get_neo4j_driver, run_cypher
+from utils.cosmos_helpers import get_gremlin_client, run_gremlin
 
 import lancedb
 
@@ -167,7 +167,7 @@ class StreamingInferenceAgent(InferenceAgent):
 app = Flask(__name__, template_folder=os.path.join(BASE_DIR, "templates"))
 
 # Globals — initialized once at startup
-_driver = None
+_gremlin = None
 _lance_table = None
 _llm_client = None
 _embedding_client = None
@@ -177,12 +177,12 @@ _tools = None
 
 def init_resources():
     """Connect to all data sources once at startup."""
-    global _driver, _lance_table, _llm_client, _embedding_client, _db_path, _tools
+    global _gremlin, _lance_table, _llm_client, _embedding_client, _db_path, _tools
 
-    print("[1/4] Connecting to Neo4j...")
-    _driver = get_neo4j_driver()
-    run_cypher(_driver, "RETURN 1 AS ok")
-    print("  OK")
+    print("[1/4] Connecting to Cosmos DB (Gremlin)...")
+    _gremlin = get_gremlin_client()
+    run_gremlin(_gremlin, "g.V().limit(1).count()")
+    print("  OK (indigokg/knowledgegraph)")
 
     print("[2/4] Connecting to LanceDB...")
     lance_db_path = os.path.join(PROJECT_ROOT, "source_data", "lancedb_store")
@@ -200,7 +200,7 @@ def init_resources():
     assert os.path.exists(_db_path), f"DB not found: {_db_path}"
     print("  OK")
 
-    _tools = build_tools(_driver, _lance_table, _embedding_client, _db_path)
+    _tools = build_tools(_gremlin, _lance_table, _embedding_client, _db_path)
     print(f"\nReady — tools: {', '.join(_tools.keys())}")
 
 

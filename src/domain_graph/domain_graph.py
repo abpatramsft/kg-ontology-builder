@@ -40,16 +40,19 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from utils.llm import get_llm_client, call_llm, parse_llm_json
-from utils.neo4j_helpers import get_neo4j_driver, run_cypher, run_cypher_write
+from utils.cosmos_helpers import (
+    get_gremlin_client, run_gremlin, run_gremlin_write,
+    esc, make_vertex_id, gval,
+)
 
 # ─── Configuration ───────────────────────────────────────────────────────────
 DB_PATH = os.path.join(PROJECT_ROOT, "source_data", "airlines.db")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  Step 0 — LLM Client & Neo4j helpers imported from utils/
+#  Step 0 — LLM Client & Cosmos DB helpers imported from utils/
 #  get_llm_client(), call_llm(), parse_llm_json()  → utils.llm
-#  get_neo4j_driver(), run_cypher(), run_cypher_write() → utils.neo4j_helpers
+#  get_gremlin_client(), run_gremlin(), run_gremlin_write() → utils.cosmos_helpers
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
@@ -497,50 +500,37 @@ def print_normalized_concepts(concepts: list[dict], cross_links: list[dict]):
 #  Step 3 — Build Domain Graph in Neo4j
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def build_domain_graph(schema: dict, enriched: dict, driver=None,
+def build_domain_graph(schema: dict, enriched: dict, client=None,
                        normalized_concepts: list[dict] = None,
                        cross_links: list[dict] = None):
     """
-    Build the Domain Graph in Neo4j:
-      - DomainEntity nodes (one per DB table — stores metadata, NOT row data)
-      - HAS_FK relationships for foreign key edges
-      - Semantic relationships (PART_OF, SUPPLIES, etc.) from LLM enrichment
-      - Concept nodes (abstract business concepts derived from table columns)
+    Build the Domain Graph in Cosmos DB (Gremlin API):
+      - DomainEntity vertices (one per DB table — stores metadata, NOT row data)
+      - HAS_FK edges for foreign key relationships
+      - Semantic edges (PART_OF, SUPPLIES, etc.) from LLM enrichment
+      - Concept vertices (abstract business concepts derived from table columns)
       - HAS_CONCEPT edges (DomainEntity → Concept)
       - RELATED_CONCEPT edges (Concept → Concept cross-links)
     """
-    if driver is None:
-        driver = get_neo4j_driver()
+    if client is None:
+        client = get_gremlin_client()
 
     normalized_concepts = normalized_concepts or []
     cross_links = cross_links or []
 
-    # ── Clean slate — drop all existing Domain Graph data ────────────
+    # ── Clean slate — drop all existing Domain Graph vertices ─────────
     print("  Clearing existing Domain Graph data...")
-    run_cypher_write(driver, "MATCH (n:DomainEntity) DETACH DELETE n")
-    run_cypher_write(driver, "MATCH (n:Concept) DETACH DELETE n")
-
-    # ── Create constraints & indexes ─────────────────────────────────
     try:
-        run_cypher(driver,
-            "CREATE CONSTRAINT domain_entity_name IF NOT EXISTS "
-            "FOR (d:DomainEntity) REQUIRE d.name IS UNIQUE"
-        )
-        print("  Created uniqueness constraint on DomainEntity.name")
+        run_gremlin_write(client, "g.V().hasLabel('DomainEntity').drop()")
     except Exception as e:
-        print(f"  Constraint already exists or skipped: {e}")
-
+        print(f"  WARN: Could not drop DomainEntity vertices: {e}")
     try:
-        run_cypher(driver,
-            "CREATE CONSTRAINT concept_name IF NOT EXISTS "
-            "FOR (c:Concept) REQUIRE c.name IS UNIQUE"
-        )
-        print("  Created uniqueness constraint on Concept.name")
+        run_gremlin_write(client, "g.V().hasLabel('Concept').drop()")
     except Exception as e:
-        print(f"  Constraint already exists or skipped: {e}")
+        print(f"  WARN: Could not drop Concept vertices: {e}")
 
-    # ── Insert nodes ─────────────────────────────────────────────────
-    print("\n  Inserting nodes...")
+    # ── Insert DomainEntity vertices ──────────────────────────────────
+    print("\n  Inserting DomainEntity vertices...")
     for table_name, info in schema.items():
         enr = enriched.get(table_name, {})
         description = enr.get("description", f"Table: {table_name}")
@@ -549,48 +539,44 @@ def build_domain_graph(schema: dict, enriched: dict, driver=None,
         col_info = json.dumps(
             [{"name": c["name"], "type": c["type"]} for c in info["columns"]]
         )
+        vid = make_vertex_id("DomainEntity", table_name)
+        try:
+            run_gremlin_write(client, (
+                f"g.addV('DomainEntity')"
+                f".property('id', '{esc(vid)}')"
+                f".property('category', 'domain')"
+                f".property('name', '{esc(table_name)}')"
+                f".property('description', '{esc(description)}')"
+                f".property('key_columns', '{esc(key_cols)}')"
+                f".property('column_info', '{esc(col_info)}')"
+                f".property('row_count', {info['row_count']})"
+                f".property('domain', '{esc(domain)}')"
+                f".property('source_type', 'structured_db')"
+            ))
+            print(f"    + {table_name} (domain: {domain})")
+        except Exception as e:
+            print(f"    WARN: DomainEntity '{table_name}' failed: {e}")
 
-        run_cypher_write(driver, """
-            CREATE (d:DomainEntity {
-                name: $name,
-                description: $description,
-                key_columns: $key_columns,
-                column_info: $column_info,
-                row_count: $row_count,
-                domain: $domain,
-                source_type: 'structured_db'
-            })
-        """, {
-            "name": table_name,
-            "description": description,
-            "key_columns": key_cols,
-            "column_info": col_info,
-            "row_count": info["row_count"],
-            "domain": domain,
-        })
-        print(f"    + {table_name} (domain: {domain})")
-
-    # ── Insert FK-based edges (HAS_FK) ──────────────────────────────
+    # ── Insert FK-based edges (HAS_FK) ────────────────────────────────
     print("\n  Inserting FK edges...")
     for table_name, info in schema.items():
         for fk in info["foreign_keys"]:
             target = fk["to_table"]
-            reason = f"FK: {table_name}.{fk['from_col']} → {target}.{fk['to_col']}"
+            reason = f"FK: {table_name}.{fk['from_col']} -> {target}.{fk['to_col']}"
+            from_id = make_vertex_id("DomainEntity", table_name)
+            to_id = make_vertex_id("DomainEntity", target)
             try:
-                run_cypher_write(driver, """
-                    MATCH (a:DomainEntity {name: $from_name})
-                    MATCH (b:DomainEntity {name: $to_name})
-                    CREATE (a)-[:HAS_FK {reason: $reason}]->(b)
-                """, {
-                    "from_name": table_name,
-                    "to_name": target,
-                    "reason": reason,
-                })
+                run_gremlin_write(client, (
+                    f"g.V('{esc(from_id)}')"
+                    f".addE('HAS_FK')"
+                    f".to(g.V('{esc(to_id)}'))"
+                    f".property('reason', '{esc(reason)}')"
+                ))
                 print(f"    + {table_name} —[HAS_FK]→ {target}")
             except Exception as e:
                 print(f"    WARN: FK edge {table_name}→{target} failed: {e}")
 
-    # ── Insert semantic edges (from LLM enrichment) ──────────────────
+    # ── Insert semantic edges (from LLM enrichment) ───────────────────
     print("\n  Inserting semantic edges...")
     for table_name, enr in enriched.items():
         for rel in enr.get("semantic_relationships", []):
@@ -598,135 +584,114 @@ def build_domain_graph(schema: dict, enriched: dict, driver=None,
             target = rel["target_table"]
             reason = rel.get("reason", "")
 
-            # Skip if target table doesn't exist in schema
             if target not in schema:
                 print(f"    SKIP: {table_name} —[{rel_type}]→ {target} (target not in schema)")
                 continue
-
-            # Skip HAS_FK duplicates (already inserted above)
             if rel_type == "HAS_FK":
                 continue
 
-            # Sanitize rel_type for Cypher (only alphanumeric + underscore)
             safe_rel_type = "".join(c if c.isalnum() or c == "_" else "_" for c in rel_type)
-
+            from_id = make_vertex_id("DomainEntity", table_name)
+            to_id = make_vertex_id("DomainEntity", target)
             try:
-                # Neo4j doesn't allow parameterized relationship types,
-                # so we use f-string for the type but parameters for data
-                run_cypher_write(driver, f"""
-                    MATCH (a:DomainEntity {{name: $from_name}})
-                    MATCH (b:DomainEntity {{name: $to_name}})
-                    CREATE (a)-[:{safe_rel_type} {{reason: $reason}}]->(b)
-                """, {
-                    "from_name": table_name,
-                    "to_name": target,
-                    "reason": reason,
-                })
+                run_gremlin_write(client, (
+                    f"g.V('{esc(from_id)}')"
+                    f".addE('{esc(safe_rel_type)}')"
+                    f".to(g.V('{esc(to_id)}'))"
+                    f".property('reason', '{esc(reason)}')"
+                ))
                 print(f"    + {table_name} —[{safe_rel_type}]→ {target}")
             except Exception as e:
                 print(f"    WARN: Semantic edge {table_name}—[{safe_rel_type}]→{target} failed: {e}")
 
-    # ── Insert Concept nodes ────────────────────────────────────────
+    # ── Insert Concept vertices ───────────────────────────────────────
     if normalized_concepts:
-        print(f"\n  Inserting {len(normalized_concepts)} Concept nodes...")
+        print(f"\n  Inserting {len(normalized_concepts)} Concept vertices...")
         for nc in normalized_concepts:
             source_tables_json = json.dumps(nc["source_tables"])
             derived_from_json = json.dumps(nc.get("derived_from", {}))
+            is_shared = len(nc["source_tables"]) > 1
+            vid = make_vertex_id("Concept", nc["name"])
+            nc_name = nc["name"]
+            nc_desc = nc["description"]
             try:
-                run_cypher_write(driver, """
-                    CREATE (c:Concept {
-                        name: $name,
-                        description: $description,
-                        source_tables: $source_tables,
-                        derived_from: $derived_from,
-                        shared: $shared
-                    })
-                """, {
-                    "name": nc["name"],
-                    "description": nc["description"],
-                    "source_tables": source_tables_json,
-                    "derived_from": derived_from_json,
-                    "shared": len(nc["source_tables"]) > 1,
-                })
-                shared_tag = " [SHARED]" if len(nc["source_tables"]) > 1 else ""
+                run_gremlin_write(client, (
+                    f"g.addV('Concept')"
+                    f".property('id', '{esc(vid)}')"
+                    f".property('category', 'domain')"
+                    f".property('name', '{esc(nc_name)}')"
+                    f".property('description', '{esc(nc_desc)}')"
+                    f".property('source_tables', '{esc(source_tables_json)}')"
+                    f".property('derived_from', '{esc(derived_from_json)}')"
+                    f".property('shared', {str(is_shared).lower()})"
+                ))
+                shared_tag = " [SHARED]" if is_shared else ""
                 print(f"    + {nc['name']}{shared_tag}")
             except Exception as e:
-                print(f"    WARN: Concept node '{nc['name']}' failed: {e}")
+                print(f"    WARN: Concept vertex '{nc['name']}' failed: {e}")
 
-        # ── Insert HAS_CONCEPT edges (DomainEntity → Concept) ────────
+        # ── Insert HAS_CONCEPT edges (DomainEntity → Concept) ─────────
         print("\n  Inserting HAS_CONCEPT edges...")
         for nc in normalized_concepts:
             for table in nc["source_tables"]:
                 cols = nc.get("derived_from", {}).get(table, [])
                 derived_str = ", ".join(cols) if cols else "inferred"
+                de_id = make_vertex_id("DomainEntity", table)
+                concept_id = make_vertex_id("Concept", nc["name"])
                 try:
-                    run_cypher_write(driver, """
-                        MATCH (d:DomainEntity {name: $table_name})
-                        MATCH (c:Concept {name: $concept_name})
-                        CREATE (d)-[:HAS_CONCEPT {derived_from: $derived_from}]->(c)
-                    """, {
-                        "table_name": table,
-                        "concept_name": nc["name"],
-                        "derived_from": derived_str,
-                    })
+                    run_gremlin_write(client, (
+                        f"g.V('{esc(de_id)}')"
+                        f".addE('HAS_CONCEPT')"
+                        f".to(g.V('{esc(concept_id)}'))"
+                        f".property('derived_from', '{esc(derived_str)}')"
+                    ))
                     print(f"    + {table} —[HAS_CONCEPT]→ {nc['name']}")
                 except Exception as e:
                     print(f"    WARN: HAS_CONCEPT {table}→{nc['name']} failed: {e}")
 
-    # ── Insert RELATED_CONCEPT edges (cross-links) ───────────────────
+    # ── Insert RELATED_CONCEPT edges (cross-links) ────────────────────
     if cross_links:
         print(f"\n  Inserting {len(cross_links)} RELATED_CONCEPT edges...")
         for link in cross_links:
-            safe_type = "".join(
-                c if c.isalnum() or c == "_" else "_"
-                for c in link.get("relationship_type", "RELATED_TO")
-            )
+            concept_a_id = make_vertex_id("Concept", link["concept_a"])
+            concept_b_id = make_vertex_id("Concept", link["concept_b"])
+            rel_type = link.get("relationship_type", "RELATED_TO")
+            reason = link.get("reason", "")
             try:
-                run_cypher_write(driver, f"""
-                    MATCH (a:Concept {{name: $concept_a}})
-                    MATCH (b:Concept {{name: $concept_b}})
-                    CREATE (a)-[:RELATED_CONCEPT {{
-                        relationship_type: $rel_type,
-                        reason: $reason
-                    }}]->(b)
-                """, {
-                    "concept_a": link["concept_a"],
-                    "concept_b": link["concept_b"],
-                    "rel_type": link["relationship_type"],
-                    "reason": link.get("reason", ""),
-                })
-                print(f"    + {link['concept_a']} —[RELATED_CONCEPT/{link['relationship_type']}]→ {link['concept_b']}")
+                run_gremlin_write(client, (
+                    f"g.V('{esc(concept_a_id)}')"
+                    f".addE('RELATED_CONCEPT')"
+                    f".to(g.V('{esc(concept_b_id)}'))"
+                    f".property('relationship_type', '{esc(rel_type)}')"
+                    f".property('reason', '{esc(reason)}')"
+                ))
+                print(f"    + {link['concept_a']} —[RELATED_CONCEPT/{rel_type}]→ {link['concept_b']}")
             except Exception as e:
                 print(f"    WARN: RELATED_CONCEPT edge failed: {e}")
 
-    # ── Summary ──────────────────────────────────────────────────────
+    # ── Summary ───────────────────────────────────────────────────────
     n_concepts = len(normalized_concepts)
     n_shared = sum(1 for nc in normalized_concepts if len(nc["source_tables"]) > 1)
-    print(f"\n  Domain Graph built in Neo4j!")
-    print(f"  • {len(schema)} DomainEntity nodes")
-    print(f"  • {n_concepts} Concept nodes ({n_shared} shared across tables)")
+    print(f"\n  Domain Graph built in Cosmos DB (indigokg/knowledgegraph)!")
+    print(f"  • {len(schema)} DomainEntity vertices")
+    print(f"  • {n_concepts} Concept vertices ({n_shared} shared across tables)")
     print(f"  • {len(cross_links)} concept cross-links")
-    print(f"  View at: http://localhost:7474")
-    print(f"  Try: MATCH (n:DomainEntity)-[:HAS_CONCEPT]->(c:Concept) RETURN n, c")
-    return driver
+    return client
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  Step 4 — Query Interface
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def query_domain_graph(question: str, driver=None) -> list[dict]:
+def query_domain_graph(question: str, client=None) -> list[dict]:
     """
-    Simple agent-facing query: find DomainEntity nodes whose name or description
-    matches keywords from the question. Returns matching nodes + their relationships.
-
-    For POC: uses keyword CONTAINS matching on name and description fields.
-    For production: would use embedding-based vector similarity search.
+    Simple agent-facing query: find DomainEntity vertices whose name or description
+    matches keywords from the question. Returns matching vertices + their relationships.
+    Uses Cosmos DB Gremlin text predicates for contains matching.
     """
-    if driver is None:
-        driver = get_neo4j_driver()
+    if client is None:
+        client = get_gremlin_client()
 
-    # Extract simple keywords (lowercase, skip short/common words)
     stop_words = {"which", "what", "about", "have", "does", "that", "this",
                   "with", "from", "tell", "show", "find", "data", "tables", "related"}
     keywords = [
@@ -737,95 +702,121 @@ def query_domain_graph(question: str, driver=None) -> list[dict]:
 
     results = []
 
-    # Search DomainEntity nodes by keyword match on name or description
-    for kw in keywords:
-        records = run_cypher(driver, """
-            MATCH (n:DomainEntity)
-            WHERE toLower(n.name) CONTAINS $kw OR toLower(n.description) CONTAINS $kw
-            RETURN n.name AS name, n.description AS description,
-                   n.domain AS domain, n.key_columns AS key_columns,
-                   n.row_count AS row_count
-        """, {"kw": kw})
+    # Fetch all DomainEntity vertices and filter in Python for keyword match
+    all_entities = run_gremlin(client, (
+        "g.V().hasLabel('DomainEntity')"
+        ".valueMap('name','description','domain','key_columns','row_count')"
+    ))
 
-        for rec in records:
-            if not any(r["name"] == rec["name"] for r in results):
-                rec["matched_keyword"] = kw
-                results.append(rec)
+    for rec in all_entities:
+        name = gval(rec, "name", "")
+        description = gval(rec, "description", "")
+        for kw in keywords:
+            if kw in name.lower() or kw in description.lower():
+                if not any(r["name"] == name for r in results):
+                    results.append({
+                        "name": name,
+                        "description": description,
+                        "domain": gval(rec, "domain", "unknown"),
+                        "key_columns": gval(rec, "key_columns", "[]"),
+                        "row_count": gval(rec, "row_count", 0),
+                        "matched_keyword": kw,
+                    })
+                break
 
-    # Also search Concept nodes and pull in their parent DomainEntities
+    # Also search Concept vertices
     concept_results = []
-    for kw in keywords:
-        records = run_cypher(driver, """
-            MATCH (c:Concept)
-            WHERE toLower(c.name) CONTAINS $kw OR toLower(c.description) CONTAINS $kw
-            OPTIONAL MATCH (d:DomainEntity)-[:HAS_CONCEPT]->(c)
-            RETURN c.name AS concept_name, c.description AS concept_desc,
-                   c.source_tables AS source_tables, c.shared AS shared,
-                   collect(d.name) AS parent_entities
-        """, {"kw": kw})
-        for rec in records:
-            if not any(cr["concept_name"] == rec["concept_name"] for cr in concept_results):
-                rec["matched_keyword"] = kw
-                concept_results.append(rec)
-            # Also ensure the parent DomainEntities appear in results
-            for parent in rec.get("parent_entities", []):
-                if parent and not any(r["name"] == parent for r in results):
-                    parent_records = run_cypher(driver, """
-                        MATCH (n:DomainEntity {name: $name})
-                        RETURN n.name AS name, n.description AS description,
-                               n.domain AS domain, n.key_columns AS key_columns,
-                               n.row_count AS row_count
-                    """, {"name": parent})
-                    for pr in parent_records:
-                        pr["matched_keyword"] = f"{kw} (via concept '{rec['concept_name']}')"
-                        results.append(pr)
+    all_concepts = run_gremlin(client, (
+        "g.V().hasLabel('Concept')"
+        ".valueMap('name','description','source_tables','shared')"
+    ))
+    for rec in all_concepts:
+        c_name = gval(rec, "name", "")
+        c_desc = gval(rec, "description", "")
+        for kw in keywords:
+            if kw in c_name.lower() or kw in c_desc.lower():
+                if not any(cr["concept_name"] == c_name for cr in concept_results):
+                    # Find parent DomainEntities via HAS_CONCEPT edges
+                    cid = make_vertex_id("Concept", c_name)
+                    parent_recs = run_gremlin(client, (
+                        f"g.V('{esc(cid)}').in('HAS_CONCEPT').values('name')"
+                    ))
+                    parent_entities = [p for p in parent_recs if p]
+                    concept_results.append({
+                        "concept_name": c_name,
+                        "concept_desc": c_desc,
+                        "source_tables": gval(rec, "source_tables", "[]"),
+                        "shared": gval(rec, "shared", False),
+                        "parent_entities": parent_entities,
+                        "matched_keyword": kw,
+                    })
+                    # Add parent DomainEntities to results if not already there
+                    for parent in parent_entities:
+                        if parent and not any(r["name"] == parent for r in results):
+                            parent_recs2 = run_gremlin(client, (
+                                f"g.V().hasLabel('DomainEntity').has('name', '{esc(parent)}')"
+                                ".valueMap('name','description','domain','key_columns','row_count')"
+                            ))
+                            for pr in parent_recs2:
+                                results.append({
+                                    "name": gval(pr, "name", ""),
+                                    "description": gval(pr, "description", ""),
+                                    "domain": gval(pr, "domain", "unknown"),
+                                    "key_columns": gval(pr, "key_columns", "[]"),
+                                    "row_count": gval(pr, "row_count", 0),
+                                    "matched_keyword": f"{kw} (via concept '{c_name}')",
+                                })
+                break
 
     # For each matched node, fetch outgoing + incoming relationships + concepts
     for node in results:
         node["relationships"] = []
         node["concepts"] = []
+        vid = make_vertex_id("DomainEntity", node["name"])
 
-        # Outgoing edges to DomainEntity
-        out_records = run_cypher(driver, """
-            MATCH (a:DomainEntity {name: $name})-[r]->(b:DomainEntity)
-            RETURN type(r) AS rel_type, b.name AS target, r.reason AS reason
-        """, {"name": node["name"]})
-        for rec in out_records:
+        out_edges = run_gremlin(client, (
+            f"g.V('{esc(vid)}').outE().hasLabel(neq('HAS_CONCEPT'))"
+            ".where(inV().hasLabel('DomainEntity'))"
+            ".project('rel_type','target','reason')"
+            ".by(label())"
+            ".by(inV().values('name'))"
+            ".by(coalesce(values('reason'), constant('')))"
+        ))
+        for rec in out_edges:
             node["relationships"].append({
                 "direction": "outgoing",
-                "type": rec["rel_type"],
-                "target": rec["target"],
-                "reason": rec["reason"],
+                "type": rec.get("rel_type", ""),
+                "target": rec.get("target", ""),
+                "reason": rec.get("reason", ""),
             })
 
-        # Incoming edges from DomainEntity
-        in_records = run_cypher(driver, """
-            MATCH (a:DomainEntity)-[r]->(b:DomainEntity {name: $name})
-            RETURN type(r) AS rel_type, a.name AS source, r.reason AS reason
-        """, {"name": node["name"]})
-        for rec in in_records:
+        in_edges = run_gremlin(client, (
+            f"g.V('{esc(vid)}').inE()"
+            ".where(outV().hasLabel('DomainEntity'))"
+            ".project('rel_type','source','reason')"
+            ".by(label())"
+            ".by(outV().values('name'))"
+            ".by(coalesce(values('reason'), constant('')))"
+        ))
+        for rec in in_edges:
             node["relationships"].append({
                 "direction": "incoming",
-                "type": rec["rel_type"],
-                "source": rec["source"],
-                "reason": rec["reason"],
+                "type": rec.get("rel_type", ""),
+                "source": rec.get("source", ""),
+                "reason": rec.get("reason", ""),
             })
 
-        # Concepts linked via HAS_CONCEPT
-        concept_records = run_cypher(driver, """
-            MATCH (d:DomainEntity {name: $name})-[:HAS_CONCEPT]->(c:Concept)
-            OPTIONAL MATCH (c)-[rc:RELATED_CONCEPT]->(c2:Concept)
-            RETURN c.name AS concept_name, c.description AS concept_desc,
-                   c.shared AS shared,
-                   collect(DISTINCT {related: c2.name, type: rc.relationship_type}) AS related_concepts
-        """, {"name": node["name"]})
-        for rec in concept_records:
-            related = [r for r in rec.get("related_concepts", []) if r.get("related")]
+        concept_recs = run_gremlin(client, (
+            f"g.V('{esc(vid)}').out('HAS_CONCEPT')"
+            ".valueMap('name','description','shared')"
+        ))
+        for rec in concept_recs:
+            c_name = gval(rec, "name", "")
             node["concepts"].append({
-                "name": rec["concept_name"],
-                "description": rec["concept_desc"],
-                "shared": rec.get("shared", False),
-                "related_concepts": related,
+                "name": c_name,
+                "description": gval(rec, "description", ""),
+                "shared": gval(rec, "shared", False),
+                "related_concepts": [],
             })
 
     return results, concept_results
@@ -875,76 +866,90 @@ def print_query_results(question: str, results: list[dict],
 #  Step 5 — Visualize the Full Graph
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def visualize_graph(driver=None):
-    """Print all nodes and edges in the Domain Graph."""
-    if driver is None:
-        driver = get_neo4j_driver()
+def visualize_graph(client=None):
+    """Print all vertices and edges in the Domain Graph (Cosmos DB Gremlin)."""
+    if client is None:
+        client = get_gremlin_client()
 
     print(f"\n{'=' * 70}")
-    print("  DOMAIN GRAPH — ALL NODES & EDGES")
+    print("  DOMAIN GRAPH — ALL VERTICES & EDGES (Cosmos DB)")
     print(f"{'=' * 70}")
 
-    # DomainEntity nodes
-    print("\n  DomainEntity Nodes:")
-    records = run_cypher(driver, """
-        MATCH (n:DomainEntity)
-        RETURN n.name AS name, n.description AS description,
-               n.domain AS domain, n.row_count AS row_count
-        ORDER BY n.name
-    """)
+    # DomainEntity vertices
+    print("\n  DomainEntity Vertices:")
+    records = run_gremlin(client, (
+        "g.V().hasLabel('DomainEntity')"
+        ".valueMap('name','description','domain','row_count')"
+    ))
     for rec in records:
-        print(f"    [{rec['domain']}] {rec['name']} — {rec['description']} ({rec['row_count']} rows)")
+        name = gval(rec, "name", "")
+        domain = gval(rec, "domain", "")
+        desc = gval(rec, "description", "")
+        row_count = gval(rec, "row_count", 0)
+        print(f"    [{domain}] {name} — {desc} ({row_count} rows)")
 
-    # Concept nodes
-    print("\n  Concept Nodes:")
-    concept_records = run_cypher(driver, """
-        MATCH (c:Concept)
-        RETURN c.name AS name, c.description AS description,
-               c.source_tables AS source_tables, c.shared AS shared
-        ORDER BY c.name
-    """)
+    # Concept vertices
+    print("\n  Concept Vertices:")
+    concept_records = run_gremlin(client, (
+        "g.V().hasLabel('Concept')"
+        ".valueMap('name','description','source_tables','shared')"
+    ))
     if not concept_records:
         print("    (none)")
     for rec in concept_records:
-        shared_tag = " [SHARED]" if rec.get("shared") else ""
-        print(f"    {rec['name']}{shared_tag} — {rec['description']}")
-        print(f"      Source tables: {rec['source_tables']}")
+        name = gval(rec, "name", "")
+        shared = gval(rec, "shared", False)
+        shared_tag = " [SHARED]" if shared else ""
+        desc = gval(rec, "description", "")
+        src_tables = gval(rec, "source_tables", "[]")
+        print(f"    {name}{shared_tag} — {desc}")
+        print(f"      Source tables: {src_tables}")
 
-    # DomainEntity edges
+    # DomainEntity → DomainEntity edges
     print("\n  DomainEntity Edges:")
-    records = run_cypher(driver, """
-        MATCH (a:DomainEntity)-[r]->(b:DomainEntity)
-        RETURN a.name AS from_node, type(r) AS rel_type,
-               b.name AS to_node, r.reason AS reason
-        ORDER BY a.name
-    """)
-    for rec in records:
-        print(f"    {rec['from_node']} —[{rec['rel_type']}]→ {rec['to_node']}  ({rec['reason']})")
+    de_edges = run_gremlin(client, (
+        "g.V().hasLabel('DomainEntity').outE()"
+        ".where(inV().hasLabel('DomainEntity'))"
+        ".project('from_node','rel_type','to_node','reason')"
+        ".by(outV().values('name'))"
+        ".by(label())"
+        ".by(inV().values('name'))"
+        ".by(coalesce(values('reason'), constant('')))"
+    ))
+    for rec in de_edges:
+        print(f"    {rec.get('from_node','')} —[{rec.get('rel_type','')}]→ "
+              f"{rec.get('to_node','')}  ({rec.get('reason','')})")
 
     # HAS_CONCEPT edges
     print("\n  HAS_CONCEPT Edges:")
-    hc_records = run_cypher(driver, """
-        MATCH (d:DomainEntity)-[r:HAS_CONCEPT]->(c:Concept)
-        RETURN d.name AS entity, c.name AS concept, r.derived_from AS derived_from
-        ORDER BY d.name, c.name
-    """)
+    hc_records = run_gremlin(client, (
+        "g.V().hasLabel('DomainEntity').outE('HAS_CONCEPT')"
+        ".project('entity','concept','derived_from')"
+        ".by(outV().values('name'))"
+        ".by(inV().values('name'))"
+        ".by(coalesce(values('derived_from'), constant('')))"
+    ))
     if not hc_records:
         print("    (none)")
     for rec in hc_records:
-        print(f"    {rec['entity']} —[HAS_CONCEPT]→ {rec['concept']}  (derived from: {rec['derived_from']})")
+        print(f"    {rec.get('entity','')} —[HAS_CONCEPT]→ "
+              f"{rec.get('concept','')}  (derived from: {rec.get('derived_from','')})")
 
     # RELATED_CONCEPT edges
     print("\n  RELATED_CONCEPT Edges:")
-    rc_records = run_cypher(driver, """
-        MATCH (a:Concept)-[r:RELATED_CONCEPT]->(b:Concept)
-        RETURN a.name AS from_concept, b.name AS to_concept,
-               r.relationship_type AS rel_type, r.reason AS reason
-        ORDER BY a.name
-    """)
+    rc_records = run_gremlin(client, (
+        "g.V().hasLabel('Concept').outE('RELATED_CONCEPT')"
+        ".project('from_concept','to_concept','rel_type','reason')"
+        ".by(outV().values('name'))"
+        ".by(inV().values('name'))"
+        ".by(coalesce(values('relationship_type'), constant('')))"
+        ".by(coalesce(values('reason'), constant('')))"
+    ))
     if not rc_records:
         print("    (none)")
     for rec in rc_records:
-        print(f"    {rec['from_concept']} —[{rec['rel_type']}]→ {rec['to_concept']}  ({rec['reason']})")
+        print(f"    {rec.get('from_concept','')} —[{rec.get('rel_type','')}]→ "
+              f"{rec.get('to_concept','')}  ({rec.get('reason','')})")
 
     print(f"{'=' * 70}")
 
@@ -994,14 +999,14 @@ def main():
     print_normalized_concepts(normalized_concepts, cross_links)
 
     # Step 3: Build Graph
-    print("\n[Step 3] Building Domain Graph in Neo4j...")
-    driver = get_neo4j_driver()
-    build_domain_graph(schema, enriched, driver,
+    print("\n[Step 3] Building Domain Graph in Cosmos DB (indigokg/knowledgegraph)...")
+    gremlin = get_gremlin_client()
+    build_domain_graph(schema, enriched, gremlin,
                        normalized_concepts=normalized_concepts,
                        cross_links=cross_links)
 
     # Step 4: Visualize
-    visualize_graph(driver)
+    visualize_graph(gremlin)
 
     # Step 5: Demo Queries
     demo_questions = [
@@ -1012,12 +1017,12 @@ def main():
     ]
     print("\n\n[Step 5] Running demo queries...")
     for q in demo_questions:
-        results, concept_results = query_domain_graph(q, driver)
+        results, concept_results = query_domain_graph(q, gremlin)
         print_query_results(q, results, concept_results)
 
-    driver.close()
-    print("\nDone! View your graph at http://localhost:7474")
-    print("Try: MATCH (n:DomainEntity)-[r]->(m) RETURN n, r, m")
+    gremlin.close()
+    print("\nDone! Domain Graph stored in Cosmos DB (indigokg / knowledgegraph).")
+    print("Query with Gremlin: g.V().hasLabel('DomainEntity').valueMap(true)")
 
 
 if __name__ == "__main__":

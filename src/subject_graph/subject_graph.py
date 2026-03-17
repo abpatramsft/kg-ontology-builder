@@ -36,18 +36,20 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from utils.llm import get_llm_client, call_llm, parse_llm_json, get_embedding_client, embed_texts
-from utils.neo4j_helpers import get_neo4j_driver, run_cypher, run_cypher_write
+from utils.cosmos_helpers import (
+    get_gremlin_client, run_gremlin, run_gremlin_write,
+    esc, make_vertex_id, gval,
+)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  Step 1 — Fetch Subject Nodes (from Layer 2)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def fetch_subjects(driver=None) -> list[dict]:
+def fetch_subjects(client=None) -> list[dict]:
     """
-    Read all :Subject nodes from Neo4j, including their document context
-    via MENTIONS edges (Document → Subject) and SPO triplet context
-    via RELATES_TO edges (Subject → Object).
+    Read all Subject vertices from Cosmos DB (Gremlin), including document context
+    via MENTIONS edges and SPO triplet context via RELATES_TO edges.
 
     Returns list of:
         {
@@ -59,53 +61,57 @@ def fetch_subjects(driver=None) -> list[dict]:
             "spo_contexts": [{"predicate": str, "object_name": str, "object_type": str}]
         }
     """
-    if driver is None:
-        driver = get_neo4j_driver()
+    if client is None:
+        client = get_gremlin_client()
 
-    # Get all Subject nodes
-    records = run_cypher(driver, """
-        MATCH (s:Subject)
-        RETURN s.name AS name, s.type AS type,
-               s.description AS description, s.mention_count AS mention_count
-        ORDER BY s.mention_count DESC
-    """)
+    # Get all Subject vertices
+    records = run_gremlin(client,
+        "g.V().hasLabel('Subject').valueMap('name','type','description','mention_count')"
+    )
 
     subjects = []
     for rec in records:
-        # For each subject, fetch document contexts via MENTIONS edges
-        docs = run_cypher(driver, """
-            MATCH (d:Document)-[r:MENTIONS]->(s:Subject {name: $name})
-            RETURN d.name AS doc_name, d.topic_summary AS topic_summary,
-                   r.context AS context
-            ORDER BY d.name
-        """, {"name": rec["name"]})
+        name = gval(rec, "name", "")
+        sid = make_vertex_id("Subject", name)
+
+        # Fetch document contexts via MENTIONS edges
+        doc_recs = run_gremlin(client,
+            f"g.V('{esc(sid)}').inE('MENTIONS')"
+            ".project('doc_name','topic_summary','context')"
+            ".by(outV().values('name'))"
+            ".by(outV().coalesce(values('topic_summary'), constant('')))"
+            ".by(coalesce(values('context'), constant('')))"
+        )
 
         # Fetch SPO triplet contexts via RELATES_TO edges
-        spo_records = run_cypher(driver, """
-            MATCH (s:Subject {name: $name})-[r:RELATES_TO]->(o:Object)
-            RETURN r.predicate AS predicate, o.name AS object_name, o.type AS object_type
-        """, {"name": rec["name"]})
+        spo_recs = run_gremlin(client,
+            f"g.V('{esc(sid)}').outE('RELATES_TO')"
+            ".project('predicate','object_name','object_type')"
+            ".by(values('predicate'))"
+            ".by(inV().values('name'))"
+            ".by(inV().coalesce(values('type'), constant('')))"
+        )
 
         subjects.append({
-            "name": rec["name"],
-            "type": rec["type"] or "unknown",
-            "description": rec["description"] or "",
-            "mention_count": rec["mention_count"] or 1,
+            "name": name,
+            "type": gval(rec, "type") or "unknown",
+            "description": gval(rec, "description") or "",
+            "mention_count": gval(rec, "mention_count") or 1,
             "doc_contexts": [
                 {
-                    "doc_name": d["doc_name"],
+                    "doc_name": d.get("doc_name", ""),
                     "topic_summary": d.get("topic_summary", ""),
                     "mention_context": d.get("context", ""),
                 }
-                for d in docs
+                for d in doc_recs
             ],
             "spo_contexts": [
                 {
-                    "predicate": sr["predicate"],
-                    "object_name": sr["object_name"],
+                    "predicate": sr.get("predicate", ""),
+                    "object_name": sr.get("object_name", ""),
                     "object_type": sr.get("object_type", ""),
                 }
-                for sr in spo_records
+                for sr in spo_recs
             ],
         })
 
@@ -131,9 +137,9 @@ def print_subjects(subjects: list[dict]):
 #  Step 2 — Fetch Domain Entity Nodes (from Layer 1)
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def fetch_domain_entities(driver=None) -> list[dict]:
+def fetch_domain_entities(client=None) -> list[dict]:
     """
-    Read all :DomainEntity nodes from Neo4j, including their relationships.
+    Read all DomainEntity vertices from Cosmos DB (Gremlin), including relationships.
 
     Returns list of:
         {
@@ -143,66 +149,77 @@ def fetch_domain_entities(driver=None) -> list[dict]:
             "key_columns": str (JSON array),
             "column_info": str (JSON array),
             "row_count": int,
-            "relationships": [{"type": str, "direction": str, "target": str}]
+            "relationships": [{"type": str, "direction": str, "target": str}],
+            "concepts": [{"name": str, "description": str, "shared": bool}]
         }
     """
-    if driver is None:
-        driver = get_neo4j_driver()
+    if client is None:
+        client = get_gremlin_client()
 
-    records = run_cypher(driver, """
-        MATCH (d:DomainEntity)
-        RETURN d.name AS name, d.description AS description,
-               d.domain AS domain, d.key_columns AS key_columns,
-               d.column_info AS column_info, d.row_count AS row_count
-        ORDER BY d.name
-    """)
+    records = run_gremlin(client,
+        "g.V().hasLabel('DomainEntity')"
+        ".valueMap('name','description','domain','key_columns','column_info','row_count')"
+    )
 
     entities = []
     for rec in records:
-        # Fetch relationships
-        out_rels = run_cypher(driver, """
-            MATCH (a:DomainEntity {name: $name})-[r]->(b:DomainEntity)
-            RETURN type(r) AS rel_type, b.name AS target, r.reason AS reason
-        """, {"name": rec["name"]})
+        name = gval(rec, "name", "")
+        vid = make_vertex_id("DomainEntity", name)
 
-        in_rels = run_cypher(driver, """
-            MATCH (a:DomainEntity)-[r]->(b:DomainEntity {name: $name})
-            RETURN type(r) AS rel_type, a.name AS source, r.reason AS reason
-        """, {"name": rec["name"]})
+        out_rels = run_gremlin(client,
+            f"g.V('{esc(vid)}').outE()"
+            ".where(inV().hasLabel('DomainEntity'))"
+            ".project('rel_type','target','reason')"
+            ".by(label())"
+            ".by(inV().values('name'))"
+            ".by(coalesce(values('reason'), constant('')))"
+        )
+
+        in_rels = run_gremlin(client,
+            f"g.V('{esc(vid)}').inE()"
+            ".where(outV().hasLabel('DomainEntity'))"
+            ".project('rel_type','source','reason')"
+            ".by(label())"
+            ".by(outV().values('name'))"
+            ".by(coalesce(values('reason'), constant('')))"
+        )
 
         relationships = []
         for r in out_rels:
             relationships.append({
-                "type": r["rel_type"],
+                "type": r.get("rel_type", ""),
                 "direction": "outgoing",
-                "target": r["target"],
+                "target": r.get("target", ""),
                 "reason": r.get("reason", ""),
             })
         for r in in_rels:
             relationships.append({
-                "type": r["rel_type"],
+                "type": r.get("rel_type", ""),
                 "direction": "incoming",
-                "target": r["source"],
+                "target": r.get("source", ""),
                 "reason": r.get("reason", ""),
             })
 
-        # Fetch linked Concept nodes
-        concept_records = run_cypher(driver, """
-            MATCH (d:DomainEntity {name: $name})-[:HAS_CONCEPT]->(c:Concept)
-            RETURN c.name AS name, c.description AS description, c.shared AS shared
-        """, {"name": rec["name"]})
+        concept_recs = run_gremlin(client,
+            f"g.V('{esc(vid)}').out('HAS_CONCEPT')"
+            ".valueMap('name','description','shared')"
+        )
         concepts = [
-            {"name": cr["name"], "description": cr.get("description", ""), "shared": cr.get("shared", False)}
-            for cr in concept_records
+            {
+                "name": gval(cr, "name", ""),
+                "description": gval(cr, "description", ""),
+                "shared": gval(cr, "shared", False),
+            }
+            for cr in concept_recs
         ]
 
         entities.append({
-            "name": rec["name"],
-            "description": rec["description"] or "",
-            "domain": rec["domain"] or "unknown",
-            "key_columns": rec["key_columns"] or "[]",
-            "column_info": rec["column_info"] or "[]",
-            "row_count": rec["row_count"] or 0,
+            "name": name,
+            "description": gval(rec, "description") or "",
+            "domain": gval(rec, "domain") or "unknown",
+            "key_columns": gval(rec, "key_columns") or "[]",
+            "column_info": gval(rec, "column_info") or "[]",
+            "row_count": gval(rec, "row_count") or 0,
             "relationships": relationships,
             "concepts": concepts,
         })
@@ -591,79 +608,56 @@ def print_correspondences(correspondences: list[dict]):
 #  Step 5 — Build Subject Graph (CORRESPONDS_TO edges) in Neo4j
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def build_subject_graph(correspondences: list[dict], driver=None):
+def build_subject_graph(correspondences: list[dict], client=None):
     """
-    Write CORRESPONDS_TO edges to Neo4j.
+    Write CORRESPONDS_TO edges to Cosmos DB (Gremlin).
 
     Only deletes existing CORRESPONDS_TO edges — preserves Layer 1 and Layer 2 data.
     Each edge has properties: confidence, method, reason.
     """
-    if driver is None:
-        driver = get_neo4j_driver()
+    if client is None:
+        client = get_gremlin_client()
 
-    # ── Clean existing CORRESPONDS_TO edges only ─────────────────────
+    # ── Clean existing CORRESPONDS_TO edges ───────────────────────────
     print("  Clearing existing CORRESPONDS_TO edges...")
-    run_cypher_write(driver, "MATCH ()-[r:CORRESPONDS_TO]->() DELETE r")
+    try:
+        run_gremlin_write(client, "g.E().hasLabel('CORRESPONDS_TO').drop()")
+    except Exception as e:
+        print(f"  WARN: Could not drop CORRESPONDS_TO edges: {e}")
 
-    # ── Insert CORRESPONDS_TO edges ──────────────────────────────────
+    # ── Insert CORRESPONDS_TO edges ───────────────────────────────────
     print("\n  Inserting CORRESPONDS_TO edges...")
     created = 0
     for corr in correspondences:
+        subj_id = make_vertex_id("Subject", corr["subject_name"])
+        de_id = make_vertex_id("DomainEntity", corr["domain_entity_name"])
+        corr_method = corr["method"]
+        corr_reason = corr["reason"]
         try:
-            run_cypher_write(driver, """
-                MATCH (s:Subject {name: $subject_name})
-                MATCH (d:DomainEntity {name: $domain_entity_name})
-                CREATE (s)-[:CORRESPONDS_TO {
-                    confidence: $confidence,
-                    method: $method,
-                    reason: $reason
-                }]->(d)
-            """, {
-                "subject_name": corr["subject_name"],
-                "domain_entity_name": corr["domain_entity_name"],
-                "confidence": corr["confidence"],
-                "method": corr["method"],
-                "reason": corr["reason"],
-            })
+            run_gremlin_write(client,
+                f"g.V('{esc(subj_id)}')"
+                f".addE('CORRESPONDS_TO')"
+                f".to(g.V('{esc(de_id)}'))"
+                f".property('confidence', {corr['confidence']})"
+                f".property('method', '{esc(corr_method)}')"
+                f".property('reason', '{esc(corr_reason)}')"
+            )
             created += 1
             print(f"    + {corr['subject_name']} —[CORRESPONDS_TO]→ {corr['domain_entity_name']}  "
                   f"(confidence: {corr['confidence']})")
         except Exception as e:
-            # Try case-insensitive fallback for Subject match
-            try:
-                run_cypher_write(driver, """
-                    MATCH (s:Subject) WHERE toLower(s.name) = toLower($subject_name)
-                    MATCH (d:DomainEntity {name: $domain_entity_name})
-                    CREATE (s)-[:CORRESPONDS_TO {
-                        confidence: $confidence,
-                        method: $method,
-                        reason: $reason
-                    }]->(d)
-                """, {
-                    "subject_name": corr["subject_name"],
-                    "domain_entity_name": corr["domain_entity_name"],
-                    "confidence": corr["confidence"],
-                    "method": corr["method"],
-                    "reason": corr["reason"],
-                })
-                created += 1
-                print(f"    + {corr['subject_name']} —[CORRESPONDS_TO]→ {corr['domain_entity_name']}  "
-                      f"(confidence: {corr['confidence']}, case-insensitive match)")
-            except Exception as e2:
-                print(f"    WARN: CORRESPONDS_TO edge failed: "
-                      f"{corr['subject_name']} → {corr['domain_entity_name']}: {e2}")
+            print(f"    WARN: CORRESPONDS_TO edge failed: "
+                  f"{corr['subject_name']} → {corr['domain_entity_name']}: {e}")
 
-    print(f"\n  Subject Graph built! {created} CORRESPONDS_TO edge(s) created.")
-    print(f"  View at: http://localhost:7474")
-    print(f"  Try: MATCH (s:Subject)-[r:CORRESPONDS_TO]->(d:DomainEntity) RETURN s, r, d")
-    return driver
+    print(f"\n  Subject Graph built! {created} CORRESPONDS_TO edge(s) created in Cosmos DB.")
+    return client
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  Step 6 — Cross-Source Query Interface
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def query_subject_graph(question: str, driver=None) -> dict:
+def query_subject_graph(question: str, client=None) -> dict:
     """
     Full cross-layer query: traverses Subject → CORRESPONDS_TO → DomainEntity
     and Subject ← MENTIONS ← Document.
@@ -687,9 +681,6 @@ def query_subject_graph(question: str, driver=None) -> dict:
             ]
         }
     """
-    if driver is None:
-        driver = get_neo4j_driver()
-
     result = {
         "structured_sources": [],
         "unstructured_sources": [],
@@ -713,93 +704,92 @@ def query_subject_graph(question: str, driver=None) -> dict:
     seen_docs = set()
     seen_subjects = set()
 
-    # ── 1. Find subjects matching the question ───────────────────────
-    for kw in keywords:
-        records = run_cypher(driver, """
-            MATCH (s:Subject)
-            WHERE toLower(s.name) CONTAINS $kw
-            RETURN s.name AS name, s.type AS type, s.description AS description
-        """, {"kw": kw})
+    # ── 1. Find subjects matching the question ────────────────────────
+    all_subjects = run_gremlin(client,
+        "g.V().hasLabel('Subject').valueMap('name','type','description')"
+    )
+    for rec in all_subjects:
+        subj_name = gval(rec, "name", "")
+        subj_type = gval(rec, "type", "")
+        if not any(kw in subj_name.lower() for kw in keywords):
+            continue
+        if subj_name in seen_subjects:
+            continue
+        seen_subjects.add(subj_name)
 
-        for rec in records:
-            subj_name = rec["name"]
-            if subj_name in seen_subjects:
-                continue
-            seen_subjects.add(subj_name)
+        sid = make_vertex_id("Subject", subj_name)
 
-            # ── Follow CORRESPONDS_TO to structured side ─────────
-            bridges = run_cypher(driver, """
-                MATCH (s:Subject {name: $name})-[r:CORRESPONDS_TO]->(d:DomainEntity)
-                RETURN d.name AS table_name, d.description AS description,
-                       d.domain AS domain, d.key_columns AS key_columns,
-                       r.confidence AS confidence, r.reason AS reason
-            """, {"name": subj_name})
-
-            for br in bridges:
-                table_name = br["table_name"]
-                if table_name not in seen_tables:
-                    seen_tables.add(table_name)
-                    result["structured_sources"].append({
-                        "table_name": table_name,
-                        "description": br["description"],
-                        "domain": br["domain"],
-                        "key_columns": br["key_columns"],
-                        "confidence": br["confidence"],
-                        "bridged_by": [subj_name],
-                    })
-                else:
-                    # Add this subject as additional bridge
-                    for src in result["structured_sources"]:
-                        if src["table_name"] == table_name:
-                            if subj_name not in src["bridged_by"]:
-                                src["bridged_by"].append(subj_name)
-
-                result["bridge_subjects"].append({
-                    "name": subj_name,
-                    "type": rec["type"],
-                    "linked_table": table_name,
-                    "confidence": br["confidence"],
-                })
-
-            # ── Follow MENTIONS back to documents ─────────────────
-            doc_records = run_cypher(driver, """
-                MATCH (d:Document)-[:MENTIONS]->(s:Subject {name: $name})
-                RETURN d.name AS doc_name, d.topic_summary AS doc_summary
-            """, {"name": subj_name})
-
-            for dr in doc_records:
-                doc_name = dr["doc_name"]
-                if doc_name not in seen_docs:
-                    seen_docs.add(doc_name)
-                    result["unstructured_sources"].append({
-                        "document": doc_name,
-                        "summary": dr.get("doc_summary", ""),
-                        "subjects": [],
-                    })
-
-                # Add subject to document entry
-                for unsrc in result["unstructured_sources"]:
-                    if unsrc["document"] == doc_name:
-                        if subj_name not in unsrc["subjects"]:
-                            unsrc["subjects"].append(subj_name)
-
-    # ── 2. Also match DomainEntity directly (for keywords like table names) ──
-    for kw in keywords:
-        records = run_cypher(driver, """
-            MATCH (d:DomainEntity)
-            WHERE toLower(d.name) CONTAINS $kw OR toLower(d.description) CONTAINS $kw
-            RETURN d.name AS name, d.description AS description,
-                   d.domain AS domain, d.key_columns AS key_columns
-        """, {"kw": kw})
-
-        for rec in records:
-            if rec["name"] not in seen_tables:
-                seen_tables.add(rec["name"])
+        # Follow CORRESPONDS_TO to structured side
+        bridges = run_gremlin(client,
+            f"g.V('{esc(sid)}').outE('CORRESPONDS_TO')"
+            ".project('table_name','description','domain','key_columns','confidence','reason')"
+            ".by(inV().values('name'))"
+            ".by(inV().coalesce(values('description'), constant('')))"
+            ".by(inV().coalesce(values('domain'), constant('')))"
+            ".by(inV().coalesce(values('key_columns'), constant('[]')))"
+            ".by(values('confidence'))"
+            ".by(coalesce(values('reason'), constant('')))"
+        )
+        for br in bridges:
+            table_name = br.get("table_name", "")
+            if table_name not in seen_tables:
+                seen_tables.add(table_name)
                 result["structured_sources"].append({
-                    "table_name": rec["name"],
-                    "description": rec["description"],
-                    "domain": rec["domain"],
-                    "key_columns": rec["key_columns"],
+                    "table_name": table_name,
+                    "description": br.get("description", ""),
+                    "domain": br.get("domain", ""),
+                    "key_columns": br.get("key_columns", "[]"),
+                    "confidence": br.get("confidence", 0.0),
+                    "bridged_by": [subj_name],
+                })
+            else:
+                for src in result["structured_sources"]:
+                    if src["table_name"] == table_name and subj_name not in src["bridged_by"]:
+                        src["bridged_by"].append(subj_name)
+
+            result["bridge_subjects"].append({
+                "name": subj_name,
+                "type": subj_type,
+                "linked_table": table_name,
+                "confidence": br.get("confidence", 0.0),
+            })
+
+        # Follow MENTIONS back to documents
+        doc_records = run_gremlin(client,
+            f"g.V('{esc(sid)}').in('MENTIONS')"
+            ".project('doc_name','doc_summary')"
+            ".by(values('name'))"
+            ".by(coalesce(values('topic_summary'), constant('')))"
+        )
+        for dr in doc_records:
+            doc_name = dr.get("doc_name", "")
+            if doc_name not in seen_docs:
+                seen_docs.add(doc_name)
+                result["unstructured_sources"].append({
+                    "document": doc_name,
+                    "summary": dr.get("doc_summary", ""),
+                    "subjects": [],
+                })
+            for unsrc in result["unstructured_sources"]:
+                if unsrc["document"] == doc_name and subj_name not in unsrc["subjects"]:
+                    unsrc["subjects"].append(subj_name)
+
+    # ── 2. Also match DomainEntity directly by keyword ────────────────
+    all_entities = run_gremlin(client,
+        "g.V().hasLabel('DomainEntity')"
+        ".valueMap('name','description','domain','key_columns')"
+    )
+    for rec in all_entities:
+        name = gval(rec, "name", "")
+        desc = gval(rec, "description", "")
+        if any(kw in name.lower() or kw in desc.lower() for kw in keywords):
+            if name not in seen_tables:
+                seen_tables.add(name)
+                result["structured_sources"].append({
+                    "table_name": name,
+                    "description": desc,
+                    "domain": gval(rec, "domain", ""),
+                    "key_columns": gval(rec, "key_columns", "[]"),
                     "confidence": 1.0,
                     "bridged_by": ["direct_keyword_match"],
                 })
@@ -849,83 +839,82 @@ def print_query_results(question: str, results: dict):
 #  Step 7 — Visualize the Full 3-Layer Bridge
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def visualize_subject_graph(driver=None):
-    """Print all CORRESPONDS_TO edges and full 3-layer graph summary."""
-    if driver is None:
-        driver = get_neo4j_driver()
+def visualize_subject_graph(client=None):
+    """Print all CORRESPONDS_TO edges and full 3-layer graph summary (Cosmos DB)."""
+    if client is None:
+        client = get_gremlin_client()
 
     print(f"\n{'=' * 70}")
-    print("  SUBJECT GRAPH — CORRESPONDS_TO BRIDGE")
+    print("  SUBJECT GRAPH — CORRESPONDS_TO BRIDGE (Cosmos DB)")
     print(f"{'=' * 70}")
 
-    # ── CORRESPONDS_TO edges ──────────────────────────────────────────
+    # CORRESPONDS_TO edges
     print("\n  CORRESPONDS_TO Edges (Subject → DomainEntity):")
-    records = run_cypher(driver, """
-        MATCH (s:Subject)-[r:CORRESPONDS_TO]->(d:DomainEntity)
-        RETURN s.name AS subject, s.type AS subject_type,
-               d.name AS table_name, d.domain AS domain,
-               r.confidence AS confidence, r.method AS method,
-               r.reason AS reason
-        ORDER BY r.confidence DESC
-    """)
+    records = run_gremlin(client,
+        "g.V().hasLabel('Subject').outE('CORRESPONDS_TO')"
+        ".project('subject','subject_type','table_name','domain','confidence','method','reason')"
+        ".by(outV().values('name'))"
+        ".by(outV().coalesce(values('type'), constant('')))"
+        ".by(inV().values('name'))"
+        ".by(inV().coalesce(values('domain'), constant('')))"
+        ".by(values('confidence'))"
+        ".by(coalesce(values('method'), constant('')))"
+        ".by(coalesce(values('reason'), constant('')))"
+    )
     if not records:
         print("    (no CORRESPONDS_TO edges found)")
     for rec in records:
-        print(f"    [{rec['subject_type']:10s}] {rec['subject']:30s} —[CORRESPONDS_TO]→ "
-              f"{rec['table_name']:15s}  (confidence: {rec['confidence']}, "
-              f"method: {rec['method']})")
-        if rec.get("reason"):
-            print(f"      {' ' * 42} {rec['reason'][:70]}")
+        stype = rec.get("subject_type", "")
+        subj = rec.get("subject", "")
+        table = rec.get("table_name", "")
+        conf = rec.get("confidence", 0)
+        method = rec.get("method", "")
+        reason = rec.get("reason", "")
+        print(f"    [{stype:10s}] {subj:30s} —[CORRESPONDS_TO]→ "
+              f"{table:15s}  (confidence: {conf}, method: {method})")
+        if reason:
+            print(f"      {' ' * 42} {reason[:70]}")
 
-    # ── Full 2-layer traversal (no Chunk nodes in KG) ───────────────
+    # Full paths: Document → Subject → DomainEntity
     print(f"\n  Full Paths (Document → Subject → DomainEntity):")
-    records = run_cypher(driver, """
-        MATCH (doc:Document)-[:MENTIONS]->(s:Subject)
-              -[r:CORRESPONDS_TO]->(de:DomainEntity)
-        RETURN doc.name AS document,
-               s.name AS subject, de.name AS table_name,
-               r.confidence AS confidence
-        ORDER BY doc.name, s.name
-    """)
-    if not records:
+    path_recs = run_gremlin(client,
+        "g.V().hasLabel('Document').as('doc')"
+        ".out('MENTIONS').as('s')"
+        ".out('CORRESPONDS_TO').as('de')"
+        ".select('doc','s','de')"
+        ".by(values('name'))"
+        ".by(values('name'))"
+        ".by(values('name'))"
+    )
+    if not path_recs:
         print("    (no complete Document → Subject → DomainEntity paths found)")
-    for rec in records:
-        print(f"    {rec['document']:25s} → "
-              f"{rec['subject']:25s} → {rec['table_name']}"
-              f"  ({rec['confidence']})")
+    for rec in path_recs:
+        print(f"    {rec.get('doc',''):25s} → {rec.get('s',''):25s} → {rec.get('de','')}")
 
-    # ── SPO triplets (Subject → Object) ──────────────────────────────
+    # SPO triplets
     print(f"\n  SPO Triplets (Subject → Object):")
-    records = run_cypher(driver, """
-        MATCH (s:Subject)-[r:RELATES_TO]->(o:Object)
-        RETURN s.name AS subject, r.predicate AS predicate, o.name AS object
-        ORDER BY s.name
-    """)
-    if not records:
+    spo_recs = run_gremlin(client,
+        "g.V().hasLabel('Subject').outE('RELATES_TO')"
+        ".project('subject','predicate','object')"
+        ".by(outV().values('name'))"
+        ".by(values('predicate'))"
+        ".by(inV().values('name'))"
+    )
+    if not spo_recs:
         print("    (no RELATES_TO edges found)")
-    for rec in records:
-        print(f"    {rec['subject']:25s} —[{rec['predicate']}]→ {rec['object']}")
+    for rec in spo_recs:
+        print(f"    {rec.get('subject',''):25s} —[{rec.get('predicate','')}]→ {rec.get('object','')}")
 
-    # ── Summary counts ────────────────────────────────────────────────
+    # Summary counts
     print(f"\n  Summary:")
     for label in ["DomainEntity", "Document", "Subject", "Object"]:
-        count = run_cypher(driver, f"MATCH (n:{label}) RETURN count(n) AS c")[0]["c"]
-        print(f"    {label} nodes: {count}")
-
+        count_result = run_gremlin(client, f"g.V().hasLabel('{label}').count()")
+        count = count_result[0] if count_result else 0
+        print(f"    {label} vertices: {count}")
     for rel_type in ["HAS_FK", "MENTIONS", "RELATES_TO", "CORRESPONDS_TO"]:
-        count = run_cypher(
-            driver,
-            f"MATCH ()-[r:{rel_type}]->() RETURN count(r) AS c"
-        )[0]["c"]
+        count_result = run_gremlin(client, f"g.E().hasLabel('{rel_type}').count()")
+        count = count_result[0] if count_result else 0
         print(f"    {rel_type} edges: {count}")
-
-    # Semantic edges (dynamic types from Layer 1)
-    sem_count = run_cypher(driver, """
-        MATCH (a:DomainEntity)-[r]->(b:DomainEntity)
-        WHERE type(r) <> 'HAS_FK'
-        RETURN count(r) AS c
-    """)[0]["c"]
-    print(f"    Semantic edges (Layer 1): {sem_count}")
 
     print(f"{'=' * 70}")
 
@@ -969,21 +958,21 @@ def main():
     print("=" * 70)
 
     # Step 1: Fetch Subjects
-    print("\n[Step 1] Fetching Subject nodes from Neo4j (Layer 2)...")
-    driver = get_neo4j_driver()
-    subjects = fetch_subjects(driver)
+    print("\n[Step 1] Fetching Subject vertices from Cosmos DB (Layer 2)...")
+    gremlin = get_gremlin_client()
+    subjects = fetch_subjects(gremlin)
     if not subjects:
-        print("  ERROR: No Subject nodes found. Run Layer 2 (lexical_graph.py) first.")
-        driver.close()
+        print("  ERROR: No Subject vertices found. Run Layer 2 (lexical_graph.py) first.")
+        gremlin.close()
         return
     print_subjects(subjects)
 
     # Step 2: Fetch Domain Entities
-    print("\n[Step 2] Fetching DomainEntity nodes from Neo4j (Layer 1)...")
-    domain_entities = fetch_domain_entities(driver)
+    print("\n[Step 2] Fetching DomainEntity vertices from Cosmos DB (Layer 1)...")
+    domain_entities = fetch_domain_entities(gremlin)
     if not domain_entities:
-        print("  ERROR: No DomainEntity nodes found. Run Layer 1 (domain_graph.py) first.")
-        driver.close()
+        print("  ERROR: No DomainEntity vertices found. Run Layer 1 (domain_graph.py) first.")
+        gremlin.close()
         return
     print_domain_entities(domain_entities)
 
@@ -1006,7 +995,7 @@ def main():
             lance_table = None
 
         correspondences = resolve_correspondences_advanced(
-            subjects, domain_entities, llm_client, driver,
+            subjects, domain_entities, llm_client, gremlin,
             lance_table=lance_table, embedding_client=embedding_client,
             direction=args.direction,
         )
@@ -1028,11 +1017,11 @@ def main():
     print_correspondences(correspondences)
 
     # Step 5: Build graph
-    print("\n[Step 5] Building Subject Graph (CORRESPONDS_TO edges) in Neo4j...")
-    build_subject_graph(correspondences, driver)
+    print("\n[Step 5] Building Subject Graph (CORRESPONDS_TO edges) in Cosmos DB...")
+    build_subject_graph(correspondences, gremlin)
 
     # Step 6: Visualize
-    visualize_subject_graph(driver)
+    visualize_subject_graph(gremlin)
 
     # Step 7: Demo queries
     demo_questions = [
@@ -1044,14 +1033,12 @@ def main():
     ]
     print("\n\n[Step 7] Running demo cross-source queries...")
     for q in demo_questions:
-        results = query_subject_graph(q, driver)
+        results = query_subject_graph(q, gremlin)
         print_query_results(q, results)
 
-    driver.close()
-    print("\nDone! View the full graph at http://localhost:7474")
-    print("Try: MATCH (d:Document)-[:MENTIONS]->(s:Subject)"
-          "-[:CORRESPONDS_TO]->(de:DomainEntity) RETURN d, s, de\n"
-          "     MATCH (s:Subject)-[r:RELATES_TO]->(o:Object) RETURN s, r, o")
+    gremlin.close()
+    print("\nDone! Subject Graph stored in Cosmos DB (indigokg / knowledgegraph).")
+    print("Query with Gremlin: g.V().hasLabel('Subject').out('CORRESPONDS_TO').valueMap(true)")
 
 
 if __name__ == "__main__":

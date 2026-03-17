@@ -22,7 +22,7 @@ Unstructured Sources          Structured Sources         Structured Sources
                     │
               [Inference Agent]  ← Layer 4 ✅
               graph_ontology_tool  │  vector_search_tool  │  sql_query_tool
-              (Neo4j KG)           │  (LanceDB)           │  (SQLite)
+              (Cosmos DB Gremlin)  │  (LanceDB)           │  (SQLite)
 ```
 
 | Layer | Source | What it captures | Status |
@@ -77,7 +77,8 @@ KG_ontology_generation/
 │   ├── utils/                       # Shared utilities (DRY)
 │   │   ├── __init__.py
 │   │   ├── llm.py                   # Azure OpenAI LLM + embedding client helpers
-│   │   ├── neo4j_helpers.py         # Neo4j driver, Cypher read/write helpers
+│   │   ├── cosmos_helpers.py        # Cosmos DB Gremlin client, read/write helpers, esc(), make_vertex_id(), gval()
+│   │   ├── neo4j_helpers.py         # Legacy Neo4j helpers (no longer imported — kept for reference)
 │   │   └── pdf_extractor.py         # PDF → JSON extraction via Azure OpenAI GPT-4.1 vision
 │   │
 │   ├── domain_graph/                # Layer 1 — Domain Graph (structured data)
@@ -117,18 +118,60 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 2. Neo4j (Docker)
+### 2. Azure Cosmos DB (Gremlin API)
+
+The graph database is hosted on Azure Cosmos DB. The account (`cosmosdb-gremlin-abpatra`) already exists. Run the following Azure CLI commands to create the database and graph container programmatically:
 
 ```bash
-docker run -d --name neo4j-kg \
-  -p 7474:7474 -p 7687:7687 \
-  -e NEO4J_AUTH=neo4j/password123 \
-  neo4j:5-community
+# 1. Create the database
+az cosmosdb gremlin database create \
+  --account-name cosmosdb-gremlin-abpatra \
+  --resource-group rg-abpatra-7946 \
+  --name indigokg \
+  -o table
+
+# 2. Create the graph container with partition key /category
+#    MSYS_NO_PATHCONV=1 prevents Git Bash from mangling the path on Windows
+MSYS_NO_PATHCONV=1 az cosmosdb gremlin graph create \
+  --account-name cosmosdb-gremlin-abpatra \
+  --resource-group rg-abpatra-7946 \
+  --database-name indigokg \
+  --name knowledgegraph \
+  --partition-key-path "/category" \
+  --throughput 400 \
+  -o table
 ```
 
-- **Browser:** http://localhost:7474
-- **Bolt endpoint:** `bolt://localhost:7687`
-- **Auth:** `neo4j` / `password123`
+| Flag | Purpose |
+|---|---|
+| `--database-name indigokg` | Logical namespace grouping all 3 KG layers |
+| `--name knowledgegraph` | Single container for Domain + Lexical + Subject graphs (cross-layer edges require co-location) |
+| `--partition-key-path "/category"` | Vertices use `category='domain'` (DomainEntity/Concept) or `category='lexical'` (Document/Subject/Object) |
+| `--throughput 400` | Minimum 400 RU/s — sufficient for development; scale up for production |
+
+> **Windows note:** The `MSYS_NO_PATHCONV=1` prefix is required when using Git Bash. Without it, Git Bash converts `/category` into a Windows file path (`C:/Program Files/Git/category`) which Cosmos DB rejects. Not needed in PowerShell or WSL.
+
+To retrieve the primary key programmatically:
+
+```bash
+az cosmosdb keys list \
+  --name cosmosdb-gremlin-abpatra \
+  --resource-group rg-abpatra-7946 \
+  --query "primaryKey" -o tsv
+```
+
+Or from the **Azure Portal**: navigate to your Cosmos DB account → **Settings** → **Keys** → copy **PRIMARY KEY**.
+
+Configure your `.env` file in the project root:
+
+```
+COSMOS_DB_ENDPOINT=cosmosdb-gremlin-abpatra.gremlin.cosmos.azure.com
+COSMOS_DB_KEY=<your-primary-key>
+```
+
+- **Gremlin endpoint:** `wss://cosmosdb-gremlin-abpatra.gremlin.cosmos.azure.com:443/`
+- **Database:** `indigokg`
+- **Graph container:** `knowledgegraph`
 
 ### 3. Azure OpenAI
 
@@ -197,24 +240,24 @@ python src/domain_graph/domain_graph.py --advanced
 1. **Introspect** — reads SQLite schema (tables, columns, PKs, FKs, row counts)
 2. **Enrich** — LLM generates descriptions, domain labels, semantic relationships, and 2-5 abstract **concepts** per table (e.g., "Aircraft Component", "Supplier Relationship")
 3. **Normalize Concepts** — LLM-based cross-table concept resolution: identifies merge groups (same concept from different tables, e.g., "Vendor Management" from parts + "Supplier Relationship" from suppliers), merges to canonical names, and detects cross-links between distinct but related concepts
-4. **Build** — creates `DomainEntity` nodes, `Concept` nodes, relationship edges (`HAS_FK`, semantic, `HAS_CONCEPT`, `RELATED_CONCEPT`) in Neo4j
-5. **Query** — keyword-based search over both DomainEntity and Concept nodes for agent routing
-6. **Visualize** — prints the full graph (DomainEntity nodes, Concept nodes, all edge types)
+4. **Build** — creates `DomainEntity` vertices, `Concept` vertices, relationship edges (`HAS_FK`, semantic, `HAS_CONCEPT`, `RELATED_CONCEPT`) in Cosmos DB Gremlin
+5. **Query** — keyword-based search over both DomainEntity and Concept vertices for agent routing
+6. **Visualize** — prints the full graph (DomainEntity vertices, Concept vertices, all edge types)
 
-#### Neo4j Schema (Layer 1):
+#### Cosmos DB Schema (Layer 1):
 
 ```
-(:DomainEntity {name, description, domain, key_columns, column_info, row_count})
-    -[:HAS_FK {reason}]->
-(:DomainEntity)
+(DomainEntity {id, name, description, domain, key_columns, column_info, row_count, category='domain'})
+    -[HAS_FK {reason}]->
+(DomainEntity)
 
-(:DomainEntity)
-    -[:HAS_CONCEPT {derived_from}]->
-(:Concept {name, description, source_tables, derived_from, shared})
+(DomainEntity)
+    -[HAS_CONCEPT {derived_from}]->
+(Concept {id, name, description, source_tables, derived_from, shared, category='domain'})
 
-(:Concept)
-    -[:RELATED_CONCEPT {relationship_type, reason}]->
-(:Concept)
+(Concept)
+    -[RELATED_CONCEPT {relationship_type, reason}]->
+(Concept)
 ```
 
 - **Concept nodes** represent abstract business ideas derived from table columns (not raw data values).
@@ -226,23 +269,29 @@ python src/domain_graph/domain_graph.py --advanced
 
 ![Domain Graph](docs/assets/domain_graph.png)
 
-#### Sample Cypher queries:
+#### Sample Gremlin queries (Layer 1):
 
-```cypher
--- All DomainEntity nodes with their concepts
-MATCH (d:DomainEntity)-[:HAS_CONCEPT]->(c:Concept) RETURN d.name, c.name, c.description
+```groovy
+// All DomainEntity vertices with their concepts
+g.V().hasLabel('DomainEntity').as('d')
+  .out('HAS_CONCEPT').as('c')
+  .select('d','c').by('name').by(valueMap('name','description'))
 
--- Shared concepts (cross-table)
-MATCH (c:Concept {shared: true})<-[:HAS_CONCEPT]-(d:DomainEntity)
-RETURN c.name, c.description, collect(d.name) AS tables
+// Shared concepts (cross-table)
+g.V().hasLabel('Concept').has('shared', true).as('c')
+  .in('HAS_CONCEPT').as('d')
+  .select('c','d').by(valueMap('name','description')).by('name')
 
--- Concept cross-links
-MATCH (a:Concept)-[r:RELATED_CONCEPT]->(b:Concept)
-RETURN a.name, r.relationship_type, b.name, r.reason
+// Concept cross-links
+g.E().hasLabel('RELATED_CONCEPT')
+  .project('from','rel_type','to','reason')
+  .by(outV().values('name'))
+  .by('relationship_type')
+  .by(inV().values('name'))
+  .by('reason')
 
--- Full Layer 1 graph (entities + concepts)
-MATCH (n) WHERE n:DomainEntity OR n:Concept
-OPTIONAL MATCH (n)-[r]-(m) RETURN n, r, m
+// All Layer 1 vertices (entities + concepts)
+g.V().has('category','domain').valueMap(true)
 ```
 
 ---
@@ -268,17 +317,17 @@ python src/lexical_graph/lexical_graph.py --advanced
 5. **Entity Resolution** — LLM-based cross-document entity resolution: identifies merge groups (same entity, different names) and implicit mentions (parent entity implied by product name), renames to canonical forms
 6. **Deduplicate** — merges SPO triplets by canonical subject name, accumulating multiple predicate-object contexts per subject
 7. **Summarize** — generates 1-2 sentence summaries for each document
-8. **Build Graph** — creates `:Document`, `:Subject`, and `:Object` nodes with `:MENTIONS` and `:RELATES_TO` edges in Neo4j (Chunk nodes are **not** stored in the graph — chunks are used internally for LLM context management and vector search only)
+8. **Build Graph** — creates `Document`, `Subject`, and `Object` vertices with `MENTIONS` and `RELATES_TO` edges in Cosmos DB Gremlin (Chunk vertices are **not** stored in the graph — chunks are used internally for LLM context management and vector search only)
 9. **Query** — dual query interface: keyword graph traversal + vector similarity search via LanceDB
 
-#### Neo4j Schema (Layer 2):
+#### Cosmos DB Schema (Layer 2):
 
 ```
-(:Document {name, source_path, topic_summary})
-    -[:MENTIONS {context}]->
-(:Subject {name, type, description, mention_count})
-    -[:RELATES_TO {predicate}]->
-(:Object {name})
+(Document {id, name, source_path, topic_summary, category='lexical'})
+    -[MENTIONS {context}]->
+(Subject {id, name, type, description, mention_count, category='lexical'})
+    -[RELATES_TO {predicate}]->
+(Object {id, name, category='lexical'})
 ```
 
 The SPO model captures **what** each subject does/has/causes, not just that it exists. A single Subject can fan out to multiple Object nodes via different predicates — e.g., `Collins Aerospace → supplies → smoke detectors` and `Collins Aerospace → reported_issue → false alarm`.
@@ -287,28 +336,29 @@ The SPO model captures **what** each subject does/has/causes, not just that it e
 
 ![Lexical Graph](docs/assets/lexical_graph.png)
 
-#### Sample Cypher queries:
+#### Sample Gremlin queries (Layer 2):
 
-```cypher
--- Full Lexical Graph (Documents → Subjects → Objects)
-MATCH (d:Document)-[:MENTIONS]->(s:Subject)-[:RELATES_TO]->(o:Object) RETURN d, s, o
+```groovy
+// All subjects from a document with their relations
+g.V().hasLabel('Document').has('name','quality_reviews.txt')
+  .out('MENTIONS').as('s')
+  .project('name','type','predicate','object')
+  .by('name').by('type')
+  .by(outE('RELATES_TO').values('predicate').fold())
+  .by(out('RELATES_TO').values('name').fold())
 
--- All subjects from a document with their relations
-MATCH (d:Document {name: "quality_reviews.txt"})-[:MENTIONS]->(s:Subject)
-OPTIONAL MATCH (s)-[r:RELATES_TO]->(o:Object)
-RETURN DISTINCT s.name, s.type, r.predicate, o.name ORDER BY s.mention_count DESC
+// What does a specific subject relate to?
+g.V().hasLabel('Subject').has('name','Collins Aerospace')
+  .outE('RELATES_TO').project('predicate','object')
+  .by('predicate').by(inV().values('name'))
 
--- Cross-document entity overlap (subjects mentioned in both files)
-MATCH (d1:Document)-[:MENTIONS]->(s:Subject)<-[:MENTIONS]-(d2:Document)
-WHERE d1.name < d2.name
-RETURN s.name, s.type, d1.name, d2.name
+// Supplier entities across all documents
+g.V().hasLabel('Subject').has('type','supplier')
+  .project('name','mention_count').by('name').by('mention_count')
 
--- What does a specific subject relate to?
-MATCH (s:Subject {name: "Collins Aerospace"})-[r:RELATES_TO]->(o:Object)
-RETURN s.name, r.predicate, o.name
-
--- Supplier entities across all documents
-MATCH (s:Subject {type: "supplier"}) RETURN s.name, s.mention_count ORDER BY s.mention_count DESC
+// Subjects mentioned in more than one document
+g.V().hasLabel('Subject').filter(inE('MENTIONS').count().is(gt(1)))
+  .project('name','type','doc_count').by('name').by('type').by(inE('MENTIONS').count())
 ```
 
 ---
@@ -353,38 +403,48 @@ python -m src.subject_graph.subject_graph --threshold 0.55
 | `--direction subject` (default) | Per subject → find matching tables | Every subject is evaluated | Most subjects should link somewhere |
 | `--direction domain_entity` | Per table → find matching subjects | Every table is evaluated | Ensure no table is orphaned |
 
-#### Neo4j Schema (Layer 3):
+#### Cosmos DB Schema (Layer 3):
 
 ```
-(:Subject {name, type, description, mention_count})
-    -[:CORRESPONDS_TO {confidence, method, reason}]->
-(:DomainEntity {name, description, domain, key_columns})
+(Subject {id, name, type, description, mention_count, category='lexical'})
+    -[CORRESPONDS_TO {confidence, method, reason}]->
+(DomainEntity {id, name, description, domain, key_columns, category='domain'})
 ```
 
 #### Graph Visualization
 
 ![Unified Subject Graph](docs/assets/unified_subject_graph.png)
 
-#### Sample Cypher queries:
+#### Sample Gremlin queries (Layer 3):
 
-```cypher
--- All Subject ↔ DomainEntity bridges
-MATCH (s:Subject)-[r:CORRESPONDS_TO]->(d:DomainEntity)
-RETURN s.name, s.type, r.confidence, r.method, d.name ORDER BY r.confidence DESC
+```groovy
+// All Subject ↔ DomainEntity bridges ordered by confidence
+g.E().hasLabel('CORRESPONDS_TO')
+  .project('subject','type','confidence','method','entity')
+  .by(outV().values('name')).by(outV().values('type'))
+  .by('confidence').by('method')
+  .by(inV().values('name'))
+  .order().by('confidence', decr)
 
--- Full cross-layer path: Document → Subject → DomainEntity
-MATCH path = (doc:Document)-[:MENTIONS]->(s:Subject)-[:CORRESPONDS_TO]->(de:DomainEntity)
-RETURN path
+// Full cross-layer path: Document → Subject → DomainEntity
+g.V().hasLabel('Document').as('doc')
+  .out('MENTIONS').as('s')
+  .out('CORRESPONDS_TO').as('de')
+  .select('doc','s','de').by('name').by('name').by('name')
 
--- Which subjects link to the "suppliers" table?
-MATCH (s:Subject)-[r:CORRESPONDS_TO]->(d:DomainEntity {name: "suppliers"})
-RETURN s.name, s.type, r.confidence, r.reason
+// Which subjects link to the "suppliers" table?
+g.V().hasLabel('DomainEntity').has('name','suppliers')
+  .inE('CORRESPONDS_TO').project('subject','type','confidence','reason')
+  .by(outV().values('name')).by(outV().values('type'))
+  .by('confidence').by('reason')
 
--- Subjects without any bridge (unlinked)
-MATCH (s:Subject) WHERE NOT (s)-[:CORRESPONDS_TO]->() RETURN s.name, s.type
+// Subjects without any bridge (unlinked)
+g.V().hasLabel('Subject').not(outE('CORRESPONDS_TO'))
+  .project('name','type').by('name').by('type')
 
--- Tables without any bridge (orphaned)
-MATCH (d:DomainEntity) WHERE NOT ()-[:CORRESPONDS_TO]->(d) RETURN d.name, d.domain
+// Tables without any bridge (orphaned)
+g.V().hasLabel('DomainEntity').not(inE('CORRESPONDS_TO'))
+  .project('name','domain').by('name').by('domain')
 ```
 
 ---
@@ -503,7 +563,7 @@ The agent runs **one instance per entity** (per subject or per table, depending 
 - `get_subject_context(name)` — Subject + all Documents that MENTION it + context
 - `get_domain_entity_detail(name)` — DomainEntity + FK/semantic relationships + column info
 - `search_similar(query, n)` — semantic similarity search across LanceDB
-- `query_graph(cypher)` — arbitrary read-only Cypher query
+- `query_graph(gremlin)` — arbitrary read-only Gremlin traversal
 
 **How the agent works step by step:**
 
@@ -540,7 +600,7 @@ python agents/inference_agent.py
 
 | Tool | Backend | Actions |
 |---|---|---|
-| **`graph_ontology_tool`** | Neo4j | `list_node_labels`, `list_relationship_types`, `list_domain_entities`, `list_subjects` (with SPO triplets), `list_documents`, `get_domain_entity_detail` (includes linked Concept nodes), `get_subject_context` (with RELATES_TO), `get_correspondences`, `find_path`, `query_graph` |
+| **`graph_ontology_tool`** | Cosmos DB Gremlin | `list_node_labels`, `list_relationship_types`, `list_domain_entities`, `list_subjects` (with SPO triplets), `list_documents`, `get_domain_entity_detail` (includes linked Concept vertices), `get_subject_context` (with RELATES_TO), `get_correspondences`, `find_path`, `query_graph` (accepts Gremlin) |
 | **`vector_search_tool`** | LanceDB | `search(query, n)` — semantic similarity search across all embedded document chunks; `search_by_document(query, doc_name, n)` — filtered search within a specific document |
 | **`sql_query_tool`** | SQLite | `list_tables`, `describe_table`, `query(sql)` — read-only SQL access to the structured data |
 
@@ -592,56 +652,56 @@ Traces are saved to `test_inference_results.json` when `--save-trace` is used.
 
 ## Querying the Graph
 
-After building, explore in the **Neo4j Browser** at http://localhost:7474:
+After building, explore via the Cosmos DB **Data Explorer** in the Azure Portal, or using the `query_graph` action in the inference agent (accepts any read-only Gremlin):
 
-```cypher
--- All Domain Graph nodes and edges (Layer 1)
-MATCH (n:DomainEntity)-[r]->(m) RETURN n, r, m
+```groovy
+// All Domain Graph vertices and edges (Layer 1)
+g.V().has('category','domain').valueMap(true)
 
--- Domain entities with their concepts
-MATCH (d:DomainEntity)-[:HAS_CONCEPT]->(c:Concept) RETURN d.name, c.name, c.description
+// Domain entities with their concepts
+g.V().hasLabel('DomainEntity').as('d')
+  .out('HAS_CONCEPT').as('c')
+  .select('d','c').by('name').by(valueMap('name','description'))
 
--- Shared concepts (linked to multiple tables)
-MATCH (c:Concept {shared: true})<-[:HAS_CONCEPT]-(d:DomainEntity)
-RETURN c.name, collect(d.name) AS tables, c.description
+// Shared concepts (linked to multiple tables)
+g.V().hasLabel('Concept').has('shared',true).as('c')
+  .in('HAS_CONCEPT').as('d')
+  .select('c','d').by(valueMap('name','description')).by('name')
 
--- Concept cross-links
-MATCH (a:Concept)-[r:RELATED_CONCEPT]->(b:Concept)
-RETURN a.name, r.relationship_type, b.name
+// Concept cross-links
+g.E().hasLabel('RELATED_CONCEPT')
+  .project('from','rel_type','to').by(outV().values('name')).by('relationship_type').by(inV().values('name'))
 
--- Full Layer 1 graph (entities + concepts + all edges)
-MATCH (n) WHERE n:DomainEntity OR n:Concept
-OPTIONAL MATCH (n)-[r]-(m) RETURN n, r, m
+// All Lexical Graph vertices (Layer 2)
+g.V().has('category','lexical').valueMap(true)
 
--- All Lexical Graph nodes and edges (Layer 2)
-MATCH (d:Document)-[r:MENTIONS]->(s:Subject)
-OPTIONAL MATCH (s)-[rt:RELATES_TO]->(o:Object)
-RETURN d, r, s, rt, o
+// Full cross-layer path: Document → Subject → DomainEntity
+g.V().hasLabel('Document').as('doc')
+  .out('MENTIONS').as('s')
+  .out('CORRESPONDS_TO').as('de')
+  .select('doc','s','de').by('name').by('name').by('name')
 
--- Both layers together
-MATCH (n) WHERE n:DomainEntity OR n:Concept OR n:Document OR n:Subject OR n:Object
-OPTIONAL MATCH (n)-[r]-(m)
-RETURN n, r, m
+// Find a specific table (Layer 1)
+g.V().hasLabel('DomainEntity').has('name','suppliers').valueMap(true)
 
--- Full cross-layer path: Document → Subject → DomainEntity
-MATCH path = (doc:Document)-[:MENTIONS]->(s:Subject)-[:CORRESPONDS_TO]->(de:DomainEntity)
-RETURN path
+// Find a specific subject (Layer 2)
+g.V().hasLabel('Subject').has('name','A320neo').valueMap(true)
 
--- Find a specific table (Layer 1)
-MATCH (n:DomainEntity {name: "suppliers"}) RETURN n
+// All edges for a table (including concepts and FK links)
+g.V().hasLabel('DomainEntity').has('name','parts').bothE().project('label','other')
+  .by(label()).by(otherV().values('name'))
 
--- Find a specific subject (Layer 2)
-MATCH (s:Subject {name: "A320neo"}) RETURN s
+// Tables in a domain
+g.V().hasLabel('DomainEntity').has('domain','fleet_management')
+  .project('name','description').by('name').by('description')
 
--- All relationships for a table (including concepts)
-MATCH (n:DomainEntity {name: "parts"})-[r]-(m) RETURN n, r, m
+// Multi-hop from a vertex (up to 3 hops)
+g.V().hasLabel('DomainEntity').has('name','products')
+  .repeat(out()).times(3).path().by('name')
 
--- Tables in a domain
-MATCH (n:DomainEntity) WHERE n.domain = "fleet_management" RETURN n.name, n.description
-
--- Multi-hop: products → assemblies → parts
-MATCH path = (p:DomainEntity {name: "products"})-[*1..3]->(target)
-RETURN path
+// Count vertices and edges per label
+g.V().groupCount().by(label())
+g.E().groupCount().by(label())
 ```
 
 ---
@@ -650,7 +710,7 @@ RETURN path
 
 | Component | Technology | Role |
 |---|---|---|
-| Graph DB | Neo4j 5 Community (Docker) | Stores the KG ontology (all 3 layers) |
+| Graph DB | Azure Cosmos DB (Gremlin API) | Stores the KG ontology (all 3 layers in `indigokg/knowledgegraph`) |
 | Vector DB | LanceDB (local, on-disk) | Chunk embeddings + similarity search (Layer 2) |
 | Structured DB | SQLite (stdlib) | Source data for Layer 1 (`source_data/airlines.db` — 12 tables + invoices) |
 | LLM | Azure OpenAI GPT-4.1 | Schema enrichment + concept extraction/normalization + entity extraction + inference |

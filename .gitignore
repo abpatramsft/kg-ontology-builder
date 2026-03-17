@@ -29,9 +29,13 @@ Thumbs.db
 # SQLite DB (generated)
 *.db
 
+# Environment variables
+.env
+.env.*
+
 # LanceDB store (generated)
 data/lancedb_store/
-
+source_data/lancedb_store/
 
 # Claude files
 .claude/

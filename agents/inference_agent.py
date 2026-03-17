@@ -35,7 +35,7 @@ Usage:
 
     # Or programmatic usage:
     from agents.inference_agent import InferenceAgent, build_tools
-    tools = build_tools(neo4j_driver, lance_table, embedding_client, db_path)
+    tools = build_tools(gremlin_client, lance_table, embedding_client, db_path)
     agent = InferenceAgent(llm_client, tools)
     answer = agent.run("Which suppliers provide parts for the A320neo landing gear?")
 """
@@ -57,100 +57,95 @@ if SRC_DIR not in sys.path:
     sys.path.insert(0, SRC_DIR)
 
 from utils.llm import get_llm_client, get_embedding_client, embed_texts
-from utils.neo4j_helpers import get_neo4j_driver, run_cypher
+from utils.cosmos_helpers import (
+    get_gremlin_client, run_gremlin,
+    esc, make_vertex_id, gval,
+)
 
 import lancedb
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  Tool 1: Graph Ontology Tool (Neo4j)
+#  Tool 1: Graph Ontology Tool (Cosmos DB Gremlin)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 class GraphOntologyTool:
     """
-    Read-only tool to explore the unified 3-layer knowledge graph in Neo4j.
+    Read-only tool to explore the unified 3-layer knowledge graph in Cosmos DB
+    (Gremlin API, database: indigokg, container: knowledgegraph).
 
     Gives the agent a map of the data landscape: what domain entities
     (structured tables) exist, what subjects were extracted from documents,
     how they correspond, and what documents mention which subjects.
 
     Supported actions:
-      - list_node_labels()                → all node labels in the graph
-      - list_relationship_types()         → all relationship types
-      - list_domain_entities()            → all DomainEntity nodes
-      - list_subjects()                   → all Subject nodes
-      - list_documents()                  → all Document nodes
+      - list_node_labels()                → all vertex labels in the graph
+      - list_relationship_types()         → all edge labels
+      - list_domain_entities()            → all DomainEntity vertices
+      - list_subjects()                   → all Subject vertices + SPO triplets
+      - list_documents()                  → all Document vertices
       - get_domain_entity_detail(name)    → entity + relationships + column info
-      - get_subject_context(name)         → subject + documents that mention it
+      - get_subject_context(name)         → subject + documents + SPO triplets
       - get_correspondences(name)         → CORRESPONDS_TO links for a subject
       - find_path(from_name, to_name)     → shortest path between two nodes
-      - query_graph(cypher)               → arbitrary read-only Cypher query
+      - query_graph(gremlin)              → arbitrary read-only Gremlin traversal
     """
 
     NAME = "graph_ontology_tool"
     TOOL_DESCRIPTION = textwrap.dedent("""\
-    graph_ontology_tool — Read-only access to the unified Neo4j knowledge graph
-    (Domain Graph + Lexical Graph + Subject Graph).
+    graph_ontology_tool — Read-only access to the unified Cosmos DB knowledge graph
+    (Domain Graph + Lexical Graph + Subject Graph, Gremlin API).
 
     Use this tool FIRST to understand the data landscape before querying data.
 
-    Graph model:
-    - :DomainEntity nodes (structured DB tables) connected by FK/SEMANTIC edges
-    - :Concept nodes (abstract business concepts) connected to DomainEntity via HAS_CONCEPT
-      Concepts may be shared across multiple tables. Cross-linked via RELATED_CONCEPT edges.
-    - :Document nodes (source files) → :Subject nodes (via MENTIONS)
-    - :Subject nodes → :Object nodes (via RELATES_TO {predicate})
-      Each Subject-RELATES_TO-Object edge represents an SPO triplet extracted from documents.
-    - :Subject → :DomainEntity (via CORRESPONDS_TO) bridges unstructured ↔ structured data
+    Graph model (all vertices in database 'indigokg', container 'knowledgegraph'):
+    - DomainEntity vertices (structured DB tables) connected by HAS_FK/SEMANTIC edges
+    - Concept vertices connected to DomainEntity via HAS_CONCEPT; cross-linked via RELATED_CONCEPT
+    - Document vertices → Subject vertices (via MENTIONS edges)
+    - Subject vertices → Object vertices (via RELATES_TO {predicate} edges)
+    - Subject → DomainEntity (via CORRESPONDS_TO) bridges unstructured ↔ structured data
 
     Available actions (pass as JSON):
 
     1. {"action": "list_node_labels"}
-       Returns: all node labels in the graph (e.g., DomainEntity, Document, Subject, Object).
+       Returns: all vertex labels (DomainEntity, Concept, Document, Subject, Object).
 
     2. {"action": "list_relationship_types"}
-       Returns: all relationship types (e.g., FK, SEMANTIC, MENTIONS, RELATES_TO, CORRESPONDS_TO).
+       Returns: all edge labels (HAS_FK, HAS_CONCEPT, RELATED_CONCEPT, MENTIONS, RELATES_TO, CORRESPONDS_TO, ...).
 
     3. {"action": "list_domain_entities"}
-       Returns: all DomainEntity nodes — these map to structured DB tables.
+       Returns: all DomainEntity vertices — structured DB tables.
        Each has: name, description, domain, key_columns, row_count.
 
     4. {"action": "list_subjects"}
-       Returns: all Subject nodes — concepts extracted from documents.
+       Returns: all Subject vertices with SPO triplets.
        Each has: name, type, description, mention_count, spo_triplets.
-       spo_triplets show what each subject RELATES_TO (predicate + object).
 
     5. {"action": "list_documents"}
-       Returns: all Document nodes — source files in the corpus.
-       Each has: name, topic_summary, chunk_count.
+       Returns: all Document vertices.
+       Each has: name, topic_summary, subject_count.
 
     6. {"action": "get_domain_entity_detail", "name": "<entity_name>"}
        Returns: full detail for a DomainEntity — description, column info,
-       all relationships (FK, SEMANTIC) to other entities, and linked Concept nodes.
-       Concepts are abstract business ideas derived from the table's columns.
-       Use this to understand what a structured table contains and what it represents.
+       relationships to other entities, linked Concept vertices, corresponding subjects.
 
     7. {"action": "get_subject_context", "name": "<subject_name>"}
-       Returns: the Subject node + all Documents that MENTION it +
-       SPO triplets (RELATES_TO edges to Object nodes) + context.
-       Use this to understand what a concept means in the document corpus.
+       Returns: Subject vertex + documents that mention it + SPO triplets + corresponding entities.
 
     8. {"action": "get_correspondences", "name": "<subject_name>"}
-       Returns: all CORRESPONDS_TO links from a Subject to DomainEntity nodes.
-       This is the bridge — it tells you which structured table(s) hold data
-       about a concept mentioned in documents.
+       Returns: all CORRESPONDS_TO edges from a Subject to DomainEntity vertices.
 
-    9. {"action": "find_path", "from_name": "<node_name>", "to_name": "<node_name>"}
-       Returns: shortest path(s) between any two named nodes in the graph.
-       Useful for understanding how concepts and tables connect.
+    9. {"action": "find_path", "from_name": "<vertex_name>", "to_name": "<vertex_name>"}
+       Returns: path between two named vertices in the graph.
 
-    10. {"action": "query_graph", "cypher": "<Cypher query>"}
-        Runs an arbitrary read-only Cypher query. Use for flexible exploration.
-        ONLY read queries (MATCH, RETURN, WITH, OPTIONAL MATCH) are allowed.
+    10. {"action": "query_graph", "gremlin": "<Gremlin traversal>"}
+        Runs a read-only Gremlin traversal. Only g.V() / g.E() reads are allowed.
+        Example: g.V().hasLabel('DomainEntity').values('name')
+        Example: g.V().hasLabel('Subject').out('CORRESPONDS_TO').values('name')
     """)
 
-    def __init__(self, driver):
-        self.driver = driver
+    def __init__(self, client):
+        self.client = client
 
     def execute(self, action_input: dict) -> str:
         action = action_input.get("action", "").strip().lower()
@@ -161,13 +156,13 @@ class GraphOntologyTool:
                 "list_domain_entities":    self._list_domain_entities,
                 "list_subjects":           self._list_subjects,
                 "list_documents":          self._list_documents,
-                "get_domain_entity_detail":lambda: self._get_domain_entity_detail(action_input["name"]),
-                "get_subject_context":     lambda: self._get_subject_context(action_input["name"]),
-                "get_correspondences":     lambda: self._get_correspondences(action_input["name"]),
+                "get_domain_entity_detail": lambda: self._get_domain_entity_detail(action_input["name"]),
+                "get_subject_context":      lambda: self._get_subject_context(action_input["name"]),
+                "get_correspondences":      lambda: self._get_correspondences(action_input["name"]),
                 "find_path":               lambda: self._find_path(
                     action_input["from_name"], action_input["to_name"]
                 ),
-                "query_graph":             lambda: self._query_graph(action_input["cypher"]),
+                "query_graph":             lambda: self._query_graph(action_input["gremlin"]),
             }
             fn = dispatch.get(action)
             if fn is None:
@@ -181,112 +176,154 @@ class GraphOntologyTool:
         except Exception as e:
             return f"ERROR: {type(e).__name__}: {e}"
 
-    # ── Action Implementations ───────────────────────────────────────
+    # ── Action Implementations ────────────────────────────────────────
 
     def _list_node_labels(self) -> str:
-        records = run_cypher(self.driver, "CALL db.labels() YIELD label RETURN label ORDER BY label")
-        labels = [r["label"] for r in records]
-        return json.dumps({"node_labels": labels}, indent=2)
+        labels = run_gremlin(self.client, "g.V().label().dedup()")
+        return json.dumps({"vertex_labels": sorted(labels)}, indent=2)
 
     def _list_relationship_types(self) -> str:
-        records = run_cypher(
-            self.driver,
-            "CALL db.relationshipTypes() YIELD relationshipType RETURN relationshipType ORDER BY relationshipType",
-        )
-        types = [r["relationshipType"] for r in records]
-        return json.dumps({"relationship_types": types}, indent=2)
+        types = run_gremlin(self.client, "g.E().label().dedup()")
+        return json.dumps({"edge_labels": sorted(types)}, indent=2)
 
     def _list_domain_entities(self) -> str:
-        records = run_cypher(self.driver, """
-            MATCH (d:DomainEntity)
-            RETURN d.name AS name, d.description AS description,
-                   d.domain AS domain, d.key_columns AS key_columns,
-                   d.row_count AS row_count
-            ORDER BY d.name
-        """)
-        return json.dumps({"domain_entities": records, "count": len(records)}, indent=2)
+        records = run_gremlin(self.client,
+            "g.V().hasLabel('DomainEntity')"
+            ".valueMap('name','description','domain','key_columns','row_count')"
+        )
+        entities = [
+            {
+                "name": gval(r, "name", ""),
+                "description": gval(r, "description", ""),
+                "domain": gval(r, "domain", ""),
+                "key_columns": gval(r, "key_columns", "[]"),
+                "row_count": gval(r, "row_count", 0),
+            }
+            for r in records
+        ]
+        return json.dumps({"domain_entities": entities, "count": len(entities)}, indent=2)
 
     def _list_subjects(self) -> str:
-        records = run_cypher(self.driver, """
-            MATCH (s:Subject)
-            OPTIONAL MATCH (s)-[r:RELATES_TO]->(o:Object)
-            WITH s, collect({predicate: r.predicate, object: o.name, object_type: o.type}) AS spo_triplets
-            RETURN s.name AS name, s.type AS type,
-                   s.description AS description, s.mention_count AS mention_count,
-                   spo_triplets
-            ORDER BY s.mention_count DESC
-        """)
-        return json.dumps({"subjects": records, "count": len(records)}, indent=2)
+        subj_records = run_gremlin(self.client,
+            "g.V().hasLabel('Subject')"
+            ".valueMap('name','type','description','mention_count')"
+        )
+        subjects = []
+        for r in subj_records:
+            name = gval(r, "name", "")
+            sid = make_vertex_id("Subject", name)
+            spo = run_gremlin(self.client,
+                f"g.V('{esc(sid)}').outE('RELATES_TO')"
+                ".project('predicate','object','object_type')"
+                ".by(values('predicate'))"
+                ".by(inV().values('name'))"
+                ".by(inV().coalesce(values('type'), constant('')))"
+            )
+            subjects.append({
+                "name": name,
+                "type": gval(r, "type", ""),
+                "description": gval(r, "description", ""),
+                "mention_count": gval(r, "mention_count", 0),
+                "spo_triplets": spo,
+            })
+        return json.dumps({"subjects": subjects, "count": len(subjects)}, indent=2)
 
     def _list_documents(self) -> str:
-        records = run_cypher(self.driver, """
-            MATCH (d:Document)
-            OPTIONAL MATCH (d)-[:MENTIONS]->(s:Subject)
-            WITH d, count(s) AS subject_count
-            RETURN d.name AS name, d.topic_summary AS topic_summary,
-                   subject_count
-            ORDER BY d.name
-        """)
-        return json.dumps({"documents": records, "count": len(records)}, indent=2)
+        records = run_gremlin(self.client,
+            "g.V().hasLabel('Document').valueMap('name','topic_summary','chunk_count')"
+        )
+        docs = []
+        for r in records:
+            name = gval(r, "name", "")
+            did = make_vertex_id("Document", name)
+            subject_count_result = run_gremlin(self.client,
+                f"g.V('{esc(did)}').out('MENTIONS').count()"
+            )
+            subject_count = subject_count_result[0] if subject_count_result else 0
+            docs.append({
+                "name": name,
+                "topic_summary": gval(r, "topic_summary", ""),
+                "subject_count": subject_count,
+            })
+        return json.dumps({"documents": docs, "count": len(docs)}, indent=2)
 
     def _get_domain_entity_detail(self, name: str) -> str:
-        # Find the entity (case-insensitive fallback)
-        de = run_cypher(self.driver, """
-            MATCH (d:DomainEntity {name: $name})
-            RETURN d.name AS name, d.description AS description,
-                   d.domain AS domain, d.key_columns AS key_columns,
-                   d.column_info AS column_info, d.row_count AS row_count
-        """, {"name": name})
+        # Try exact ID lookup first, then scan
+        vid = make_vertex_id("DomainEntity", name)
+        de_recs = run_gremlin(self.client,
+            f"g.V('{esc(vid)}').valueMap('name','description','domain','key_columns','column_info','row_count')"
+        )
+        if not de_recs:
+            # Fallback: scan all DomainEntity vertices for name match
+            all_de = run_gremlin(self.client,
+                "g.V().hasLabel('DomainEntity').valueMap('name','description','domain','key_columns','column_info','row_count')"
+            )
+            de_recs = [r for r in all_de if gval(r, "name", "").lower() == name.lower()]
 
-        if not de:
-            de = run_cypher(self.driver, """
-                MATCH (d:DomainEntity) WHERE toLower(d.name) = toLower($name)
-                RETURN d.name AS name, d.description AS description,
-                       d.domain AS domain, d.key_columns AS key_columns,
-                       d.column_info AS column_info, d.row_count AS row_count
-            """, {"name": name})
-
-        if not de:
+        if not de_recs:
             return f"ERROR: DomainEntity '{name}' not found."
 
-        entity = de[0]
+        r = de_recs[0]
+        resolved_name = gval(r, "name", name)
+        resolved_id = make_vertex_id("DomainEntity", resolved_name)
 
-        # Outgoing relationships
-        out_rels = run_cypher(self.driver, """
-            MATCH (a:DomainEntity {name: $name})-[r]->(b)
-            RETURN type(r) AS rel_type, labels(b) AS target_labels,
-                   b.name AS target, r.reason AS reason
-        """, {"name": entity["name"]})
+        entity = {
+            "name": resolved_name,
+            "description": gval(r, "description", ""),
+            "domain": gval(r, "domain", ""),
+            "key_columns": gval(r, "key_columns", "[]"),
+            "column_info": gval(r, "column_info", "[]"),
+            "row_count": gval(r, "row_count", 0),
+        }
 
-        # Incoming relationships
-        in_rels = run_cypher(self.driver, """
-            MATCH (a)-[r]->(b:DomainEntity {name: $name})
-            RETURN type(r) AS rel_type, labels(a) AS source_labels,
-                   a.name AS source, r.reason AS reason
-        """, {"name": entity["name"]})
+        out_rels = run_gremlin(self.client,
+            f"g.V('{esc(resolved_id)}').outE()"
+            ".project('rel_type','target','target_label','reason')"
+            ".by(label())"
+            ".by(inV().values('name'))"
+            ".by(inV().label())"
+            ".by(coalesce(values('reason'), constant('')))"
+        )
 
-        # Subjects that correspond to this entity
-        correspondences = run_cypher(self.driver, """
-            MATCH (s:Subject)-[r:CORRESPONDS_TO]->(d:DomainEntity {name: $name})
-            RETURN s.name AS subject, s.type AS subject_type,
-                   r.confidence AS confidence, r.reason AS reason
-        """, {"name": entity["name"]})
+        in_rels = run_gremlin(self.client,
+            f"g.V('{esc(resolved_id)}').inE()"
+            ".project('rel_type','source','source_label','reason')"
+            ".by(label())"
+            ".by(outV().values('name'))"
+            ".by(outV().label())"
+            ".by(coalesce(values('reason'), constant('')))"
+        )
 
-        # Concepts linked to this entity
-        concepts = run_cypher(self.driver, """
-            MATCH (d:DomainEntity {name: $name})-[r:HAS_CONCEPT]->(c:Concept)
-            OPTIONAL MATCH (c)-[rc:RELATED_CONCEPT]->(c2:Concept)
-            RETURN c.name AS concept_name, c.description AS concept_desc,
-                   c.shared AS shared, r.derived_from AS derived_from,
-                   collect(DISTINCT {related: c2.name, type: rc.relationship_type, reason: rc.reason}) AS related_concepts
-        """, {"name": entity["name"]})
+        correspondences = run_gremlin(self.client,
+            f"g.V('{esc(resolved_id)}').inE('CORRESPONDS_TO')"
+            ".project('subject','subject_type','confidence','reason')"
+            ".by(outV().values('name'))"
+            ".by(outV().coalesce(values('type'), constant('')))"
+            ".by(values('confidence'))"
+            ".by(coalesce(values('reason'), constant('')))"
+        )
 
-        # Clean up related_concepts (remove nulls from OPTIONAL MATCH)
-        for c in concepts:
-            c["related_concepts"] = [
-                r for r in c.get("related_concepts", [])
-                if r.get("related") is not None
-            ]
+        concept_recs = run_gremlin(self.client,
+            f"g.V('{esc(resolved_id)}').out('HAS_CONCEPT')"
+            ".valueMap('name','description','shared')"
+        )
+        concepts = []
+        for cr in concept_recs:
+            c_name = gval(cr, "name", "")
+            cid = make_vertex_id("Concept", c_name)
+            related = run_gremlin(self.client,
+                f"g.V('{esc(cid)}').outE('RELATED_CONCEPT')"
+                ".project('related','type','reason')"
+                ".by(inV().values('name'))"
+                ".by(coalesce(values('relationship_type'), constant('')))"
+                ".by(coalesce(values('reason'), constant('')))"
+            )
+            concepts.append({
+                "concept_name": c_name,
+                "concept_desc": gval(cr, "description", ""),
+                "shared": gval(cr, "shared", False),
+                "related_concepts": related,
+            })
 
         return json.dumps({
             "entity": entity,
@@ -297,96 +334,108 @@ class GraphOntologyTool:
         }, indent=2)
 
     def _get_subject_context(self, name: str) -> str:
-        subj = run_cypher(self.driver, """
-            MATCH (s:Subject {name: $name})
-            RETURN s.name AS name, s.type AS type,
-                   s.description AS description, s.mention_count AS mention_count
-        """, {"name": name})
+        sid = make_vertex_id("Subject", name)
+        subj_recs = run_gremlin(self.client,
+            f"g.V('{esc(sid)}').valueMap('name','type','description','mention_count')"
+        )
+        if not subj_recs:
+            # Fallback: scan
+            all_s = run_gremlin(self.client,
+                "g.V().hasLabel('Subject').valueMap('name','type','description','mention_count')"
+            )
+            subj_recs = [r for r in all_s if gval(r, "name", "").lower() == name.lower()]
 
-        if not subj:
-            subj = run_cypher(self.driver, """
-                MATCH (s:Subject) WHERE toLower(s.name) = toLower($name)
-                RETURN s.name AS name, s.type AS type,
-                       s.description AS description, s.mention_count AS mention_count
-            """, {"name": name})
-
-        if not subj:
+        if not subj_recs:
             return f"ERROR: Subject '{name}' not found."
 
-        subject = subj[0]
+        r = subj_recs[0]
+        resolved_name = gval(r, "name", name)
+        resolved_id = make_vertex_id("Subject", resolved_name)
 
-        # Documents that mention this subject
-        docs = run_cypher(self.driver, """
-            MATCH (d:Document)-[r:MENTIONS]->(s:Subject {name: $name})
-            RETURN d.name AS document, d.topic_summary AS topic_summary,
-                   r.context AS mention_context
-            ORDER BY d.name
-        """, {"name": subject["name"]})
+        subject = {
+            "name": resolved_name,
+            "type": gval(r, "type", ""),
+            "description": gval(r, "description", ""),
+            "mention_count": gval(r, "mention_count", 0),
+        }
 
-        # SPO triplets (RELATES_TO edges)
-        spo_records = run_cypher(self.driver, """
-            MATCH (s:Subject {name: $name})-[r:RELATES_TO]->(o:Object)
-            RETURN r.predicate AS predicate, o.name AS object_name, o.type AS object_type
-        """, {"name": subject["name"]})
+        docs = run_gremlin(self.client,
+            f"g.V('{esc(resolved_id)}').inE('MENTIONS')"
+            ".project('document','topic_summary','mention_context')"
+            ".by(outV().values('name'))"
+            ".by(outV().coalesce(values('topic_summary'), constant('')))"
+            ".by(coalesce(values('context'), constant('')))"
+        )
 
-        # Corresponding domain entities
-        correspondences = run_cypher(self.driver, """
-            MATCH (s:Subject {name: $name})-[r:CORRESPONDS_TO]->(d:DomainEntity)
-            RETURN d.name AS domain_entity, d.description AS entity_description,
-                   r.confidence AS confidence, r.reason AS reason
-        """, {"name": subject["name"]})
+        spo = run_gremlin(self.client,
+            f"g.V('{esc(resolved_id)}').outE('RELATES_TO')"
+            ".project('predicate','object_name','object_type')"
+            ".by(values('predicate'))"
+            ".by(inV().values('name'))"
+            ".by(inV().coalesce(values('type'), constant('')))"
+        )
+
+        correspondences = run_gremlin(self.client,
+            f"g.V('{esc(resolved_id)}').outE('CORRESPONDS_TO')"
+            ".project('domain_entity','entity_description','confidence','reason')"
+            ".by(inV().values('name'))"
+            ".by(inV().coalesce(values('description'), constant('')))"
+            ".by(values('confidence'))"
+            ".by(coalesce(values('reason'), constant('')))"
+        )
 
         return json.dumps({
             "subject": subject,
             "mentioned_in_documents": docs,
-            "spo_triplets": spo_records,
+            "spo_triplets": spo,
             "corresponds_to_entities": correspondences,
         }, indent=2)
 
     def _get_correspondences(self, name: str) -> str:
-        records = run_cypher(self.driver, """
-            MATCH (s:Subject)-[r:CORRESPONDS_TO]->(d:DomainEntity)
-            WHERE s.name = $name OR toLower(s.name) = toLower($name)
-            RETURN s.name AS subject, d.name AS domain_entity,
-                   d.description AS entity_description,
-                   d.key_columns AS key_columns,
-                   r.confidence AS confidence, r.reason AS reason
-            ORDER BY r.confidence DESC
-        """, {"name": name})
-
+        sid = make_vertex_id("Subject", name)
+        records = run_gremlin(self.client,
+            f"g.V('{esc(sid)}').outE('CORRESPONDS_TO')"
+            ".project('subject','domain_entity','entity_description','key_columns','confidence','reason')"
+            ".by(outV().values('name'))"
+            ".by(inV().values('name'))"
+            ".by(inV().coalesce(values('description'), constant('')))"
+            ".by(inV().coalesce(values('key_columns'), constant('[]')))"
+            ".by(values('confidence'))"
+            ".by(coalesce(values('reason'), constant('')))"
+        )
         if not records:
             return f"No CORRESPONDS_TO links found for subject '{name}'."
-
         return json.dumps({"correspondences": records, "count": len(records)}, indent=2)
 
     def _find_path(self, from_name: str, to_name: str) -> str:
-        records = run_cypher(self.driver, """
-            MATCH (a {name: $from}), (b {name: $to}),
-                  path = shortestPath((a)-[*..6]-(b))
-            RETURN [n IN nodes(path) | {name: n.name, labels: labels(n)}] AS nodes,
-                   [r IN relationships(path) | {type: type(r), from: startNode(r).name, to: endNode(r).name}] AS relationships
-            LIMIT 3
-        """, {"from": from_name, "to": to_name})
+        try:
+            results = run_gremlin(self.client,
+                f"g.V().has('name', '{esc(from_name)}')"
+                f".repeat(bothE().otherV().simplePath())"
+                f".until(has('name', '{esc(to_name)}')).limit(1)"
+                f".path().by(project('name','label').by('name').by(label()))"
+                f".by(project('type').by(label()))"
+            )
+            if not results:
+                return f"No path found between '{from_name}' and '{to_name}'."
+            return json.dumps({"paths": results}, indent=2)
+        except Exception as e:
+            return f"Path search failed: {e}"
 
-        if not records:
-            return f"No path found between '{from_name}' and '{to_name}'."
-
-        return json.dumps({"paths": records}, indent=2)
-
-    def _query_graph(self, cypher: str) -> str:
-        stripped = cypher.strip().upper()
-        write_keywords = ["CREATE", "DELETE", "SET ", "MERGE", "REMOVE", "DROP"]
+    def _query_graph(self, gremlin_query: str) -> str:
+        stripped = gremlin_query.strip().lower()
+        write_keywords = ["addv(", "adde(", ".drop(", ".property(", "g.v().drop", "g.e().drop"]
         if any(kw in stripped for kw in write_keywords):
-            return "ERROR: Only read queries (MATCH/RETURN) are allowed."
+            return "ERROR: Only read traversals (g.V()..., g.E()...) are allowed."
 
         try:
-            records = run_cypher(self.driver, cypher)
+            records = run_gremlin(self.client, gremlin_query)
             if len(records) > 30:
                 records = records[:30]
                 return json.dumps(records, indent=2) + "\n... (truncated to 30 results)"
             return json.dumps(records, indent=2)
         except Exception as e:
-            return f"ERROR: Cypher query failed: {e}"
+            return f"ERROR: Gremlin query failed: {e}"
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1077,10 +1126,10 @@ class InferenceAgent:
 #  Helper: Build all tools
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def build_tools(driver, lance_table, embedding_client, db_path: str) -> dict:
+def build_tools(gremlin_client, lance_table, embedding_client, db_path: str) -> dict:
     """Build and return the tool dict for the InferenceAgent."""
     return {
-        "graph_ontology_tool": GraphOntologyTool(driver),
+        "graph_ontology_tool": GraphOntologyTool(gremlin_client),
         "vector_search_tool":  VectorSearchTool(lance_table, embedding_client),
         "sql_query_tool":      SQLQueryTool(db_path),
     }
@@ -1098,15 +1147,15 @@ def main():
     print("=" * 70)
 
     # ── Connect to all data sources ────────────────────────────────────
-    print("\n[1/4] Connecting to Neo4j...")
-    driver = get_neo4j_driver()
+    print("\n[1/4] Connecting to Cosmos DB (Gremlin)...")
+    gremlin = get_gremlin_client()
     # Quick connectivity check
     try:
-        run_cypher(driver, "RETURN 1 AS ok")
-        print("  ✓ Neo4j connected")
+        run_gremlin(gremlin, "g.V().limit(1).count()")
+        print("  ✓ Cosmos DB Gremlin connected (indigokg/knowledgegraph)")
     except Exception as e:
-        print(f"  ✗ Neo4j connection failed: {e}")
-        print("    Make sure Neo4j is running (docker compose up -d)")
+        print(f"  ✗ Cosmos DB connection failed: {e}")
+        print("    Check COSMOS_DB_KEY in your .env file.")
         return
 
     print("[2/4] Connecting to LanceDB...")
@@ -1134,7 +1183,7 @@ def main():
     print(f"  ✓ SQLite database: {db_path}")
 
     # ── Build tools and agent ──────────────────────────────────────────
-    tools = build_tools(driver, lance_table, embedding_client, db_path)
+    tools = build_tools(gremlin, lance_table, embedding_client, db_path)
     print(f"\n  Tools loaded: {', '.join(tools.keys())}")
     print("-" * 70)
     print("  Type your question and press Enter. Type 'quit' or 'exit' to stop.")

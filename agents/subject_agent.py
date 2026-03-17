@@ -47,7 +47,7 @@ if SRC_DIR not in sys.path:
     sys.path.insert(0, SRC_DIR)
 
 from utils.llm import call_llm, parse_llm_json, embed_texts
-from utils.neo4j_helpers import run_cypher
+from utils.cosmos_helpers import run_gremlin, esc, make_vertex_id, gval
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -56,62 +56,52 @@ from utils.neo4j_helpers import run_cypher
 
 class GraphQueryTool:
     """
-    Read-only tool that gives an agent access to explore the Neo4j knowledge
-    graph (Layer 1 DomainEntity + Layer 2 Document/Subject) and
-    optionally the LanceDB table for semantic search.
+    Read-only tool to explore the Cosmos DB knowledge graph (Gremlin API)
+    for the subject agent — covers Layer 1 DomainEntity + Layer 2 Subject/Document
+    and optionally the LanceDB vector store.
 
     Supported actions:
-      - list_subjects()               → all Subject nodes
-      - list_domain_entities()        → all DomainEntity nodes
-      - get_subject_context(name)     → Subject + its MENTIONS documents + context
-      - get_domain_entity_detail(name)→ DomainEntity + relationships + column info
-      - search_similar(query, n)      → embedding-based search in LanceDB (if available)
-      - query_graph(cypher)           → arbitrary read-only Cypher query
+      - list_subjects()               → all Subject vertices
+      - list_domain_entities()        → all DomainEntity vertices
+      - get_subject_context(name)     → Subject + MENTIONS docs + SPO triplets
+      - get_domain_entity_detail(name)→ DomainEntity + relationships + columns
+      - search_similar(query, n)      → embedding-based LanceDB search
+      - query_graph(gremlin)          → arbitrary read-only Gremlin traversal
     """
 
     TOOL_DESCRIPTION = textwrap.dedent("""\
-    graph_query_tool — Read-only access to the Neo4j knowledge graph and vector store.
+    graph_query_tool — Read-only access to the Cosmos DB knowledge graph (Gremlin) and vector store.
 
     Available actions (pass as JSON):
 
     1. {"action": "list_subjects"}
-       Returns: all Subject nodes with name, type, description, mention_count.
-       Use this to see the full list of concepts extracted from documents.
+       Returns: all Subject vertices with name, type, description, mention_count.
 
     2. {"action": "list_domain_entities"}
-       Returns: all DomainEntity nodes with name, description, domain, key_columns.
-       Use this to see the structured database tables available for matching.
+       Returns: all DomainEntity vertices with name, description, domain, key_columns.
 
     3. {"action": "get_subject_context", "name": "<subject_name>"}
-       Returns: the Subject node + all Documents that MENTION it + context.
-       Includes summaries and mention context for understanding what the subject means.
-       Use this to deeply understand what a subject means in the document context.
+       Returns: Subject vertex + Documents that MENTION it + SPO triplets + context.
 
     4. {"action": "get_domain_entity_detail", "name": "<entity_name>"}
-       Returns: the DomainEntity node + all its relationships (FK, semantic) + columns.
-       Use this to understand what a structured table contains and how it connects.
+       Returns: DomainEntity vertex + relationships + column info.
 
     5. {"action": "search_similar", "query": "<natural language query>", "n": 5}
-       Returns: top-N text fragments from the vector store most similar to the query.
-       Use this to find document mentions of a concept — helpful for understanding
-       whether a subject is really about a particular database table.
-       NOTE: This action is only available if the vector store is connected.
+       Returns: top-N text chunks from LanceDB most similar to the query.
+       NOTE: Only available if vector store is connected.
 
-    6. {"action": "query_graph", "cypher": "<Cypher query>"}
-       Runs an arbitrary read-only Cypher query against Neo4j. Use this for
-       flexible exploration — e.g., finding paths, counting nodes, etc.
-       ONLY read queries (MATCH, RETURN) are allowed.
+    6. {"action": "query_graph", "gremlin": "<Gremlin traversal>"}
+       Runs a read-only Gremlin traversal. Example: g.V().hasLabel('Subject').values('name')
+       Only g.V() / g.E() reads are allowed.
     """)
 
-    def __init__(self, driver, lance_table=None, embedding_client=None):
-        self.driver = driver
+    def __init__(self, client, lance_table=None, embedding_client=None):
+        self.client = client
         self.lance_table = lance_table
         self.embedding_client = embedding_client
 
     def execute(self, action_input: dict) -> str:
-        """Execute a tool action and return a string result."""
         action = action_input.get("action", "").strip().lower()
-
         try:
             if action == "list_subjects":
                 return self._list_subjects()
@@ -127,7 +117,7 @@ class GraphQueryTool:
                     action_input.get("n", 5),
                 )
             elif action == "query_graph":
-                return self._query_graph(action_input["cypher"])
+                return self._query_graph(action_input["gremlin"])
             else:
                 return (
                     f"ERROR: Unknown action '{action}'. "
@@ -137,95 +127,128 @@ class GraphQueryTool:
         except Exception as e:
             return f"ERROR: {type(e).__name__}: {e}"
 
-    # ── Action implementations ───────────────────────────────────────────
-
     def _list_subjects(self) -> str:
-        records = run_cypher(self.driver, """
-            MATCH (s:Subject)
-            OPTIONAL MATCH (s)-[r:RELATES_TO]->(o:Object)
-            WITH s, collect({predicate: r.predicate, object: o.name, object_type: o.type}) AS spo_triplets
-            RETURN s.name AS name, s.type AS type,
-                   s.description AS description, s.mention_count AS mention_count,
-                   spo_triplets
-            ORDER BY s.mention_count DESC
-        """)
-        return json.dumps({"subjects": records, "count": len(records)}, indent=2)
+        records = run_gremlin(self.client,
+            "g.V().hasLabel('Subject').valueMap('name','type','description','mention_count')"
+        )
+        subjects = []
+        for r in records:
+            name = gval(r, "name", "")
+            sid = make_vertex_id("Subject", name)
+            spo = run_gremlin(self.client,
+                f"g.V('{esc(sid)}').outE('RELATES_TO')"
+                ".project('predicate','object','object_type')"
+                ".by(values('predicate'))"
+                ".by(inV().values('name'))"
+                ".by(inV().coalesce(values('type'), constant('')))"
+            )
+            subjects.append({
+                "name": name,
+                "type": gval(r, "type", ""),
+                "description": gval(r, "description", ""),
+                "mention_count": gval(r, "mention_count", 0),
+                "spo_triplets": spo,
+            })
+        return json.dumps({"subjects": subjects, "count": len(subjects)}, indent=2)
 
     def _list_domain_entities(self) -> str:
-        records = run_cypher(self.driver, """
-            MATCH (d:DomainEntity)
-            RETURN d.name AS name, d.description AS description,
-                   d.domain AS domain, d.key_columns AS key_columns,
-                   d.row_count AS row_count
-            ORDER BY d.name
-        """)
-        return json.dumps({"domain_entities": records, "count": len(records)}, indent=2)
+        records = run_gremlin(self.client,
+            "g.V().hasLabel('DomainEntity')"
+            ".valueMap('name','description','domain','key_columns','row_count')"
+        )
+        entities = [
+            {
+                "name": gval(r, "name", ""),
+                "description": gval(r, "description", ""),
+                "domain": gval(r, "domain", ""),
+                "key_columns": gval(r, "key_columns", "[]"),
+                "row_count": gval(r, "row_count", 0),
+            }
+            for r in records
+        ]
+        return json.dumps({"domain_entities": entities, "count": len(entities)}, indent=2)
 
     def _get_subject_context(self, name: str) -> str:
-        # Get the subject itself
-        subj_records = run_cypher(self.driver, """
-            MATCH (s:Subject {name: $name})
-            RETURN s.name AS name, s.type AS type,
-                   s.description AS description, s.mention_count AS mention_count
-        """, {"name": name})
-
-        if not subj_records:
-            # Try case-insensitive
-            subj_records = run_cypher(self.driver, """
-                MATCH (s:Subject) WHERE toLower(s.name) = toLower($name)
-                RETURN s.name AS name, s.type AS type,
-                       s.description AS description, s.mention_count AS mention_count
-            """, {"name": name})
-
-        if not subj_records:
+        sid = make_vertex_id("Subject", name)
+        subj_recs = run_gremlin(self.client,
+            f"g.V('{esc(sid)}').valueMap('name','type','description','mention_count')"
+        )
+        if not subj_recs:
+            all_s = run_gremlin(self.client,
+                "g.V().hasLabel('Subject').valueMap('name','type','description','mention_count')"
+            )
+            subj_recs = [r for r in all_s if gval(r, "name", "").lower() == name.lower()]
+        if not subj_recs:
             return f"ERROR: Subject '{name}' not found."
 
-        subject = subj_records[0]
+        r = subj_recs[0]
+        resolved_name = gval(r, "name", name)
+        resolved_id = make_vertex_id("Subject", resolved_name)
+        subject = {
+            "name": resolved_name,
+            "type": gval(r, "type", ""),
+            "description": gval(r, "description", ""),
+            "mention_count": gval(r, "mention_count", 0),
+        }
 
-        # Get documents mentioning this subject
-        docs = run_cypher(self.driver, """
-            MATCH (d:Document)-[r:MENTIONS]->(s:Subject {name: $name})
-            RETURN d.name AS document, d.topic_summary AS topic_summary,
-                   r.context AS mention_context
-            ORDER BY d.name
-        """, {"name": subject["name"]})
+        docs = run_gremlin(self.client,
+            f"g.V('{esc(resolved_id)}').inE('MENTIONS')"
+            ".project('document','topic_summary','mention_context')"
+            ".by(outV().values('name'))"
+            ".by(outV().coalesce(values('topic_summary'), constant('')))"
+            ".by(coalesce(values('context'), constant('')))"
+        )
 
-        # Get SPO triplets (RELATES_TO edges)
-        spo_records = run_cypher(self.driver, """
-            MATCH (s:Subject {name: $name})-[r:RELATES_TO]->(o:Object)
-            RETURN r.predicate AS predicate, o.name AS object_name, o.type AS object_type
-        """, {"name": subject["name"]})
+        spo = run_gremlin(self.client,
+            f"g.V('{esc(resolved_id)}').outE('RELATES_TO')"
+            ".project('predicate','object_name','object_type')"
+            ".by(values('predicate'))"
+            ".by(inV().values('name'))"
+            ".by(inV().coalesce(values('type'), constant('')))"
+        )
 
         return json.dumps({
             "subject": subject,
             "mentioned_in_documents": docs,
             "total_documents": len(docs),
-            "spo_triplets": spo_records,
+            "spo_triplets": spo,
         }, indent=2)
 
     def _get_domain_entity_detail(self, name: str) -> str:
-        de_records = run_cypher(self.driver, """
-            MATCH (d:DomainEntity {name: $name})
-            RETURN d.name AS name, d.description AS description,
-                   d.domain AS domain, d.key_columns AS key_columns,
-                   d.column_info AS column_info, d.row_count AS row_count
-        """, {"name": name})
-
-        if not de_records:
+        vid = make_vertex_id("DomainEntity", name)
+        de_recs = run_gremlin(self.client,
+            f"g.V('{esc(vid)}').valueMap('name','description','domain','key_columns','column_info','row_count')"
+        )
+        if not de_recs:
             return f"ERROR: DomainEntity '{name}' not found."
 
-        entity = de_records[0]
+        r = de_recs[0]
+        entity = {
+            "name": gval(r, "name", name),
+            "description": gval(r, "description", ""),
+            "domain": gval(r, "domain", ""),
+            "key_columns": gval(r, "key_columns", "[]"),
+            "column_info": gval(r, "column_info", "[]"),
+            "row_count": gval(r, "row_count", 0),
+        }
 
-        # Get relationships
-        out_rels = run_cypher(self.driver, """
-            MATCH (a:DomainEntity {name: $name})-[r]->(b:DomainEntity)
-            RETURN type(r) AS rel_type, b.name AS target, r.reason AS reason
-        """, {"name": name})
+        out_rels = run_gremlin(self.client,
+            f"g.V('{esc(vid)}').outE()"
+            ".where(inV().hasLabel('DomainEntity'))"
+            ".project('rel_type','target','reason')"
+            ".by(label())"
+            ".by(inV().values('name'))"
+            ".by(coalesce(values('reason'), constant('')))"
+        )
 
-        in_rels = run_cypher(self.driver, """
-            MATCH (a:DomainEntity)-[r]->(b:DomainEntity {name: $name})
-            RETURN type(r) AS rel_type, a.name AS source, r.reason AS reason
-        """, {"name": name})
+        in_rels = run_gremlin(self.client,
+            f"g.V('{esc(vid)}').inE()"
+            ".where(outV().hasLabel('DomainEntity'))"
+            ".project('rel_type','source','reason')"
+            ".by(label())"
+            ".by(outV().values('name'))"
+            ".by(coalesce(values('reason'), constant('')))"
+        )
 
         return json.dumps({
             "entity": entity,
@@ -236,23 +259,19 @@ class GraphQueryTool:
     def _search_similar(self, query: str, n: int) -> str:
         if self.lance_table is None or self.embedding_client is None:
             return "ERROR: Vector store not available. Use other actions to explore the graph."
-
         if not query:
             return "ERROR: 'query' parameter is required for search_similar."
-
         q_embedding = embed_texts(self.embedding_client, [query])[0]
         total = len(self.lance_table)
         n = min(n, total)
         if n == 0:
             return json.dumps({"results": [], "message": "Table is empty"})
-
         results = (
             self.lance_table.search(q_embedding)
             .metric("cosine")
             .limit(n)
             .to_list()
         )
-
         output = []
         for row in results:
             score = round(1 - row["_distance"], 4)
@@ -260,29 +279,23 @@ class GraphQueryTool:
                 "chunk_id": row["chunk_id"],
                 "similarity_score": score,
                 "text": row["text"][:400],
-                "metadata": {
-                    "doc_name": row["doc_name"],
-                    "chunk_index": row["chunk_index"],
-                },
+                "metadata": {"doc_name": row["doc_name"], "chunk_index": row["chunk_index"]},
             })
-
         return json.dumps({"results": output}, indent=2)
 
-    def _query_graph(self, cypher: str) -> str:
-        # Safety: only allow read queries
-        stripped = cypher.strip().upper()
-        if any(kw in stripped for kw in ["CREATE", "DELETE", "SET", "MERGE", "REMOVE", "DROP"]):
-            return "ERROR: Only read queries (MATCH/RETURN) are allowed."
-
+    def _query_graph(self, gremlin_query: str) -> str:
+        stripped = gremlin_query.strip().lower()
+        write_keywords = ["addv(", "adde(", ".drop(", ".property("]
+        if any(kw in stripped for kw in write_keywords):
+            return "ERROR: Only read traversals are allowed."
         try:
-            records = run_cypher(self.driver, cypher)
-            # Truncate if too many results
+            records = run_gremlin(self.client, gremlin_query)
             if len(records) > 30:
                 records = records[:30]
-                return json.dumps(records, indent=2) + f"\n... (truncated to 30 of many results)"
+                return json.dumps(records, indent=2) + "\n... (truncated to 30 results)"
             return json.dumps(records, indent=2)
         except Exception as e:
-            return f"ERROR: Cypher query failed: {e}"
+            return f"ERROR: Gremlin query failed: {e}"
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1058,7 +1071,7 @@ def resolve_correspondences_advanced(
     subjects: list[dict],
     domain_entities: list[dict],
     llm_client: AzureOpenAI,
-    driver,
+    gremlin_client,
     lance_table=None,
     embedding_client=None,
     verbose: bool = True,
@@ -1066,23 +1079,17 @@ def resolve_correspondences_advanced(
     direction: str = "subject",
 ) -> list[dict]:
     """
-    Advanced entity resolution using a ReAct agent.
+    Advanced entity resolution using a ReAct agent with Cosmos DB Gremlin.
 
     direction controls the outer loop:
       - "subject" (default): One agent per subject, finds matching tables.
       - "domain_entity": One agent per table, finds matching subjects.
 
-    Same output contract as subject_graph.resolve_correspondences_simple —
-    returns a list of correspondence dicts.
-
-    The agent can explore the Neo4j graph (both layers) and optionally
-    the LanceDB vector store to produce richer, more accurate resolutions.
-
     Args:
         subjects:          List of subject dicts (from fetch_subjects).
         domain_entities:   List of domain entity dicts (from fetch_domain_entities).
         llm_client:        AzureOpenAI client for chat completions.
-        driver:            Neo4j driver instance.
+        gremlin_client:    Cosmos DB Gremlin client.
         lance_table:       Optional LanceDB table for vector search.
         embedding_client:  Optional AzureOpenAI client for embeddings.
         verbose:           Print agent reasoning trace.
@@ -1090,18 +1097,9 @@ def resolve_correspondences_advanced(
         direction:         "subject" (per-subject loop) or "domain_entity" (per-table loop).
 
     Returns:
-        [
-            {
-                "subject_name": str,
-                "domain_entity_name": str,
-                "confidence": float,
-                "method": str,
-                "reason": str,
-            },
-            ...
-        ]
+        [{"subject_name", "domain_entity_name", "confidence", "method", "reason"}, ...]
     """
-    tool = GraphQueryTool(driver, lance_table, embedding_client)
+    tool = GraphQueryTool(gremlin_client, lance_table, embedding_client)
     all_correspondences = []
 
     # ── Per-domain-entity direction ──────────────────────────────────────

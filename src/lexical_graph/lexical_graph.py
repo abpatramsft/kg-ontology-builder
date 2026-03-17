@@ -56,7 +56,10 @@ from utils.llm import (
     get_embedding_client,
     embed_texts,
 )
-from utils.neo4j_helpers import get_neo4j_driver, run_cypher, run_cypher_write
+from utils.cosmos_helpers import (
+    get_gremlin_client, run_gremlin, run_gremlin_write,
+    esc, make_vertex_id, gval,
+)
 
 # ─── Configuration ───────────────────────────────────────────────────────────
 DATA_DIR = os.path.join(PROJECT_ROOT, "source_data")
@@ -668,166 +671,125 @@ def build_lexical_graph(
     deduped: dict,
     doc_summaries: dict,
     chunk_summaries: dict,
-    driver=None,
+    client=None,
 ):
     """
-    Build the Lexical Graph in Neo4j:
-      - :Document nodes (one per file)
-      - :Subject nodes (deduplicated subjects from SPO triplets)
-      - :Object nodes (deduplicated objects from SPO triplets)
-      - :Document -[:MENTIONS]-> :Subject
-      - :Subject -[:RELATES_TO {predicate}]-> :Object
+    Build the Lexical Graph in Cosmos DB (Gremlin API):
+      - Document vertices (one per file)
+      - Subject vertices (deduplicated subjects from SPO triplets)
+      - Object vertices (deduplicated objects from SPO triplets)
+      - Document -[MENTIONS]-> Subject edges
+      - Subject -[RELATES_TO {predicate}]-> Object edges
 
     Note: Chunks are used internally for extraction and vector search
-    but are NOT stored as nodes in the knowledge graph.
+    but are NOT stored as vertices in the knowledge graph.
     Each chunk contributes one SPO triplet.
     """
-    if driver is None:
-        driver = get_neo4j_driver()
+    if client is None:
+        client = get_gremlin_client()
 
-    # ── Clean existing Lexical Graph data (keep DomainEntity from Layer 1) ──
+    # ── Clean existing Lexical Graph data (keep DomainEntity/Concept from Layer 1) ──
     print("  Clearing existing Lexical Graph data...")
-    run_cypher_write(driver, "MATCH (n:Document) DETACH DELETE n")
-    run_cypher_write(driver, "MATCH (n:Chunk) DETACH DELETE n")  # clean up any legacy Chunk nodes
-    run_cypher_write(driver, "MATCH (n:Subject) DETACH DELETE n")
-    run_cypher_write(driver, "MATCH (n:Object) DETACH DELETE n")
-
-    # ── Create constraints ────────────────────────────────────────────────
-    for label, prop in [("Document", "name"), ("Subject", "name"), ("Object", "name")]:
+    for label in ["Document", "Chunk", "Subject", "Object"]:
         try:
-            run_cypher(
-                driver,
-                f"CREATE CONSTRAINT {label.lower()}_{prop} IF NOT EXISTS "
-                f"FOR (n:{label}) REQUIRE n.{prop} IS UNIQUE",
-            )
-            print(f"  Created constraint on {label}.{prop}")
+            run_gremlin_write(client, f"g.V().hasLabel('{label}').drop()")
         except Exception as e:
-            print(f"  Constraint {label}.{prop} exists or skipped: {e}")
+            print(f"  WARN: Could not drop {label} vertices: {e}")
 
     subjects = deduped["subjects"]
     objects = deduped["objects"]
     triplets = deduped["triplets"]
 
-    # ── Insert Document nodes ─────────────────────────────────────────────
-    print("\n  Inserting Document nodes...")
+    # ── Insert Document vertices ──────────────────────────────────────
+    print("\n  Inserting Document vertices...")
     for doc in documents:
         doc_chunks = [c for c in chunks if c["doc_name"] == doc["name"]]
         summary = doc_summaries.get(doc["name"], "")
-        run_cypher_write(
-            driver,
-            """
-            CREATE (d:Document {
-                name: $name,
-                source_path: $source_path,
-                chunk_count: $chunk_count,
-                topic_summary: $topic_summary,
-                source_type: 'unstructured'
-            })
-            """,
-            {
-                "name": doc["name"],
-                "source_path": doc["source_path"],
-                "chunk_count": len(doc_chunks),
-                "topic_summary": summary,
-            },
-        )
-        print(f"    + Document: {doc['name']} ({len(doc_chunks)} chunks used for extraction)")
+        vid = make_vertex_id("Document", doc["name"])
+        doc_name = doc["name"]
+        doc_source_path = doc["source_path"]
+        try:
+            run_gremlin_write(client, (
+                f"g.addV('Document')"
+                f".property('id', '{esc(vid)}')"
+                f".property('category', 'lexical')"
+                f".property('name', '{esc(doc_name)}')"
+                f".property('source_path', '{esc(doc_source_path)}')"
+                f".property('chunk_count', {len(doc_chunks)})"
+                f".property('topic_summary', '{esc(summary)}')"
+                f".property('source_type', 'unstructured')"
+            ))
+            print(f"    + Document: {doc['name']} ({len(doc_chunks)} chunks used for extraction)")
+        except Exception as e:
+            print(f"    WARN: Document '{doc['name']}' failed: {e}")
 
-    # ── Insert Subject nodes ──────────────────────────────────────────
-    print("\n  Inserting Subject nodes...")
+    # ── Insert Subject vertices ───────────────────────────────────────
+    print("\n  Inserting Subject vertices...")
     for subj in subjects:
-        # Build description from SPO contexts
         spo_desc = "; ".join(
             f"{subj['name']} {ctx['predicate']} {ctx['object']}"
             for ctx in subj.get("spo_contexts", [])[:3]
         )[:500]
-        run_cypher_write(
-            driver,
-            """
-            CREATE (s:Subject {
-                name: $name,
-                type: $type,
-                description: $description,
-                mention_count: $mention_count
-            })
-            """,
-            {
-                "name": subj["name"],
-                "type": subj["type"],
-                "description": spo_desc,
-                "mention_count": subj["mention_count"],
-            },
-        )
-        print(f"    + Subject: {subj['name']} ({subj['type']})")
+        vid = make_vertex_id("Subject", subj["name"])
+        subj_name = subj["name"]
+        subj_type = subj["type"]
+        try:
+            run_gremlin_write(client, (
+                f"g.addV('Subject')"
+                f".property('id', '{esc(vid)}')"
+                f".property('category', 'lexical')"
+                f".property('name', '{esc(subj_name)}')"
+                f".property('type', '{esc(subj_type)}')"
+                f".property('description', '{esc(spo_desc)}')"
+                f".property('mention_count', {subj['mention_count']})"
+            ))
+            print(f"    + Subject: {subj['name']} ({subj['type']})")
+        except Exception as e:
+            print(f"    WARN: Subject '{subj['name']}' failed: {e}")
 
-    # ── Insert Object nodes ───────────────────────────────────────────
-    print("\n  Inserting Object nodes...")
+    # ── Insert Object vertices ────────────────────────────────────────
+    print("\n  Inserting Object vertices...")
     for obj in objects:
-        run_cypher_write(
-            driver,
-            """
-            CREATE (o:Object {
-                name: $name,
-                type: $type,
-                mention_count: $mention_count
-            })
-            """,
-            {
-                "name": obj["name"],
-                "type": obj["type"],
-                "mention_count": obj["mention_count"],
-            },
-        )
-        print(f"    + Object: {obj['name']} ({obj['type']})")
+        vid = make_vertex_id("Object", obj["name"])
+        obj_name = obj["name"]
+        obj_type = obj["type"]
+        try:
+            run_gremlin_write(client, (
+                f"g.addV('Object')"
+                f".property('id', '{esc(vid)}')"
+                f".property('category', 'lexical')"
+                f".property('name', '{esc(obj_name)}')"
+                f".property('type', '{esc(obj_type)}')"
+                f".property('mention_count', {obj['mention_count']})"
+            ))
+            print(f"    + Object: {obj['name']} ({obj['type']})")
+        except Exception as e:
+            print(f"    WARN: Object '{obj['name']}' failed: {e}")
 
     # ── Insert MENTIONS edges (Document → Subject) ────────────────────
     print("\n  Inserting MENTIONS edges (Document → Subject)...")
     for subj in subjects:
+        subj_id = make_vertex_id("Subject", subj["name"])
         for doc_name in subj.get("mentioned_in_docs", []):
-            # Combine SPO contexts from this document for this subject
             doc_spo_contexts = [
                 f"{ctx['predicate']} {ctx['object']}"
                 for ctx in subj.get("spo_contexts", [])
                 if ctx.get("doc_name") == doc_name
             ]
             combined_context = "; ".join(doc_spo_contexts)[:500]
-
+            doc_id = make_vertex_id("Document", doc_name)
             try:
-                run_cypher_write(
-                    driver,
-                    """
-                    MATCH (d:Document {name: $doc_name})
-                    MATCH (s:Subject {name: $subject_name})
-                    CREATE (d)-[:MENTIONS {context: $context}]->(s)
-                    """,
-                    {
-                        "doc_name": doc_name,
-                        "subject_name": subj["name"],
-                        "context": combined_context,
-                    },
+                run_gremlin_write(client,
+                    f"g.V('{esc(doc_id)}')"
+                    f".addE('MENTIONS')"
+                    f".to(g.V('{esc(subj_id)}'))"
+                    f".property('context', '{esc(combined_context)}')"
                 )
                 print(f"    + {doc_name} —[MENTIONS]→ {subj['name']}")
-            except Exception:
-                # Try case-insensitive fallback
-                try:
-                    run_cypher_write(
-                        driver,
-                        """
-                        MATCH (d:Document {name: $doc_name})
-                        MATCH (s:Subject) WHERE toLower(s.name) = toLower($subject_name)
-                        CREATE (d)-[:MENTIONS {context: $context}]->(s)
-                        """,
-                        {
-                            "doc_name": doc_name,
-                            "subject_name": subj["name"],
-                            "context": combined_context,
-                        },
-                    )
-                    print(f"    + {doc_name} —[MENTIONS]→ {subj['name']} (case-insensitive)")
-                except Exception as e:
-                    print(f"    WARN: MENTIONS edge failed: {doc_name} → {subj['name']}: {e}")
+            except Exception as e:
+                print(f"    WARN: MENTIONS edge failed: {doc_name} → {subj['name']}: {e}")
 
-    # ── Insert RELATES_TO edges (Subject → Object) ───────────────────
+    # ── Insert RELATES_TO edges (Subject → Object) ────────────────────
     print("\n  Inserting RELATES_TO edges (Subject → Object)...")
     seen_edges = set()
     for triplet in triplets:
@@ -836,43 +798,22 @@ def build_lexical_graph(
             continue
         seen_edges.add(edge_key)
 
+        subj_id = make_vertex_id("Subject", triplet["subject"])
+        obj_id = make_vertex_id("Object", triplet["object"])
+        triplet_predicate = triplet["predicate"]
         try:
-            run_cypher_write(
-                driver,
-                """
-                MATCH (s:Subject {name: $subject_name})
-                MATCH (o:Object {name: $object_name})
-                CREATE (s)-[:RELATES_TO {predicate: $predicate}]->(o)
-                """,
-                {
-                    "subject_name": triplet["subject"],
-                    "object_name": triplet["object"],
-                    "predicate": triplet["predicate"],
-                },
+            run_gremlin_write(client,
+                f"g.V('{esc(subj_id)}')"
+                f".addE('RELATES_TO')"
+                f".to(g.V('{esc(obj_id)}'))"
+                f".property('predicate', '{esc(triplet_predicate)}')"
             )
             print(f"    + {triplet['subject']} —[{triplet['predicate']}]→ {triplet['object']}")
-        except Exception:
-            # Case-insensitive fallback
-            try:
-                run_cypher_write(
-                    driver,
-                    """
-                    MATCH (s:Subject) WHERE toLower(s.name) = toLower($subject_name)
-                    MATCH (o:Object) WHERE toLower(o.name) = toLower($object_name)
-                    CREATE (s)-[:RELATES_TO {predicate: $predicate}]->(o)
-                    """,
-                    {
-                        "subject_name": triplet["subject"],
-                        "object_name": triplet["object"],
-                        "predicate": triplet["predicate"],
-                    },
-                )
-                print(f"    + {triplet['subject']} —[{triplet['predicate']}]→ {triplet['object']} (case-insensitive)")
-            except Exception as e:
-                print(f"    WARN: RELATES_TO edge failed: {triplet['subject']} → {triplet['object']}: {e}")
+        except Exception as e:
+            print(f"    WARN: RELATES_TO edge failed: {triplet['subject']} → {triplet['object']}: {e}")
 
-    print("\n  Lexical Graph built in Neo4j!")
-    return driver
+    print("\n  Lexical Graph built in Cosmos DB (indigokg/knowledgegraph)!")
+    return client
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -881,7 +822,7 @@ def build_lexical_graph(
 
 def query_lexical_graph(
     question: str,
-    driver=None,
+    client=None,
     lance_table=None,
     embedding_client=None,
     top_k: int = 5,
@@ -902,12 +843,12 @@ def query_lexical_graph(
             ]
         }
     """
-    if driver is None:
-        driver = get_neo4j_driver()
+    if client is None:
+        client = get_gremlin_client()
 
     result = {"graph_results": {"subjects": [], "documents": [], "spo_triplets": []}, "vector_results": []}
 
-    # ── 1. Graph traversal (keyword CONTAINS) ─────────────────────────
+    # ── 1. Graph traversal (keyword match in Python) ──────────────────
     stop_words = {
         "which", "what", "about", "have", "does", "that", "this",
         "with", "from", "tell", "show", "find", "data", "document",
@@ -922,80 +863,92 @@ def query_lexical_graph(
     seen_subjects = set()
     seen_docs = set()
 
+    # Fetch all subjects and filter in Python
+    all_subjects = run_gremlin(client,
+        "g.V().hasLabel('Subject').valueMap('name','type','description','mention_count')"
+    )
+    for rec in all_subjects:
+        s_name = gval(rec, "name", "")
+        for kw in keywords:
+            if kw in s_name.lower():
+                if s_name not in seen_subjects:
+                    seen_subjects.add(s_name)
+                    result["graph_results"]["subjects"].append({
+                        "name": s_name,
+                        "type": gval(rec, "type", ""),
+                        "description": gval(rec, "description", ""),
+                        "mention_count": gval(rec, "mention_count", 0),
+                        "matched_keyword": kw,
+                    })
+                break
+
+    # SPO triplets for matching subjects
     for kw in keywords:
-        # Search Subjects
-        records = run_cypher(
-            driver,
-            """
-            MATCH (s:Subject)
-            WHERE toLower(s.name) CONTAINS $kw
-            RETURN s.name AS name, s.type AS type, s.description AS description,
-                   s.mention_count AS mention_count
-            """,
-            {"kw": kw},
+        all_triplets = run_gremlin(client,
+            "g.V().hasLabel('Subject').outE('RELATES_TO')"
+            ".project('subject','predicate','object')"
+            ".by(outV().values('name'))"
+            ".by(values('predicate'))"
+            ".by(inV().values('name'))"
         )
-        for rec in records:
-            if rec["name"] not in seen_subjects:
-                seen_subjects.add(rec["name"])
-                rec["matched_keyword"] = kw
-                result["graph_results"]["subjects"].append(rec)
+        for rec in all_triplets:
+            subj_name = rec.get("subject", "")
+            obj_name = rec.get("object", "")
+            if kw in subj_name.lower() or kw in obj_name.lower():
+                result["graph_results"]["spo_triplets"].append(rec)
+                if subj_name not in seen_subjects:
+                    seen_subjects.add(subj_name)
+                    # find subject details
+                    sid = make_vertex_id("Subject", subj_name)
+                    s_recs = run_gremlin(client,
+                        f"g.V('{esc(sid)}').valueMap('name','type','description','mention_count')"
+                    )
+                    if s_recs:
+                        r = s_recs[0]
+                        result["graph_results"]["subjects"].append({
+                            "name": gval(r, "name", subj_name),
+                            "type": gval(r, "type", ""),
+                            "description": gval(r, "description", ""),
+                            "mention_count": gval(r, "mention_count", 0),
+                            "matched_keyword": kw,
+                        })
 
-        # Search Objects (by name) — may lead to Subject via RELATES_TO
-        obj_records = run_cypher(
-            driver,
-            """
-            MATCH (s:Subject)-[r:RELATES_TO]->(o:Object)
-            WHERE toLower(o.name) CONTAINS $kw OR toLower(s.name) CONTAINS $kw
-            RETURN s.name AS subject, r.predicate AS predicate, o.name AS object
-            """,
-            {"kw": kw},
-        )
-        for rec in obj_records:
-            result["graph_results"]["spo_triplets"].append(rec)
-            # Also add the subject if not already seen
-            if rec["subject"] not in seen_subjects:
-                seen_subjects.add(rec["subject"])
-                subj_detail = run_cypher(driver, """
-                    MATCH (s:Subject {name: $name})
-                    RETURN s.name AS name, s.type AS type, s.description AS description,
-                           s.mention_count AS mention_count
-                """, {"name": rec["subject"]})
-                if subj_detail:
-                    subj_detail[0]["matched_keyword"] = kw
-                    result["graph_results"]["subjects"].append(subj_detail[0])
-
-        # Search Documents (by summary)
-        records = run_cypher(
-            driver,
-            """
-            MATCH (d:Document)
-            WHERE toLower(d.topic_summary) CONTAINS $kw OR toLower(d.name) CONTAINS $kw
-            RETURN d.name AS name, d.topic_summary AS topic_summary,
-                   d.chunk_count AS chunk_count, d.source_path AS source_path
-            """,
-            {"kw": kw},
-        )
-        for rec in records:
-            if rec["name"] not in seen_docs:
-                seen_docs.add(rec["name"])
-                rec["matched_keyword"] = kw
-                result["graph_results"]["documents"].append(rec)
+    # Fetch all documents and filter in Python
+    all_docs = run_gremlin(client,
+        "g.V().hasLabel('Document').valueMap('name','topic_summary','chunk_count','source_path')"
+    )
+    for rec in all_docs:
+        d_name = gval(rec, "name", "")
+        summary = gval(rec, "topic_summary", "")
+        for kw in keywords:
+            if kw in d_name.lower() or kw in summary.lower():
+                if d_name not in seen_docs:
+                    seen_docs.add(d_name)
+                    result["graph_results"]["documents"].append({
+                        "name": d_name,
+                        "topic_summary": summary,
+                        "chunk_count": gval(rec, "chunk_count", 0),
+                        "source_path": gval(rec, "source_path", ""),
+                        "matched_keyword": kw,
+                    })
+                break
 
     # Also collect parent documents for matching subjects
     for subj in result["graph_results"]["subjects"]:
-        records = run_cypher(
-            driver,
-            """
-            MATCH (d:Document)-[:MENTIONS]->(s:Subject {name: $name})
-            RETURN d.name AS name, d.topic_summary AS topic_summary,
-                   d.chunk_count AS chunk_count, d.source_path AS source_path
-            """,
-            {"name": subj["name"]},
+        sid = make_vertex_id("Subject", subj["name"])
+        records = run_gremlin(client,
+            f"g.V('{esc(sid)}').in('MENTIONS').valueMap('name','topic_summary','chunk_count','source_path')"
         )
         for rec in records:
-            if rec["name"] not in seen_docs:
-                seen_docs.add(rec["name"])
-                result["graph_results"]["documents"].append(rec)
+            d_name = gval(rec, "name", "")
+            if d_name not in seen_docs:
+                seen_docs.add(d_name)
+                result["graph_results"]["documents"].append({
+                    "name": d_name,
+                    "topic_summary": gval(rec, "topic_summary", ""),
+                    "chunk_count": gval(rec, "chunk_count", 0),
+                    "source_path": gval(rec, "source_path", ""),
+                })
 
     # ── 2. Vector similarity (LanceDB) ───────────────────────────────
     if lance_table is not None and embedding_client:
@@ -1069,78 +1022,83 @@ def print_query_results(question: str, results: dict):
 #  Step 7 — Visualize the Full Lexical Graph
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def visualize_lexical_graph(driver=None):
-    """Print all nodes and edges in the Lexical Graph."""
-    if driver is None:
-        driver = get_neo4j_driver()
+def visualize_lexical_graph(client=None):
+    """Print all vertices and edges in the Lexical Graph (Cosmos DB Gremlin)."""
+    if client is None:
+        client = get_gremlin_client()
 
     print(f"\n{'=' * 70}")
-    print("  LEXICAL GRAPH — ALL NODES & EDGES")
+    print("  LEXICAL GRAPH — ALL VERTICES & EDGES (Cosmos DB)")
     print(f"{'=' * 70}")
 
     # Documents
     print("\n  Documents:")
-    records = run_cypher(driver, """
-        MATCH (d:Document)
-        RETURN d.name AS name, d.topic_summary AS summary, d.chunk_count AS chunks
-        ORDER BY d.name
-    """)
+    records = run_gremlin(client,
+        "g.V().hasLabel('Document').valueMap('name','topic_summary','chunk_count')"
+    )
     for rec in records:
-        print(f"    :Document {rec['name']} — {rec.get('summary', '')[:60]} "
-              f"({rec['chunks']} chunks used for extraction)")
+        name = gval(rec, "name", "")
+        summary = gval(rec, "topic_summary", "")
+        chunks = gval(rec, "chunk_count", 0)
+        print(f"    :Document {name} — {summary[:60]} ({chunks} chunks used for extraction)")
 
     # Subjects
     print("\n  Subjects:")
-    records = run_cypher(driver, """
-        MATCH (s:Subject)
-        RETURN s.name AS name, s.type AS type, s.mention_count AS mentions
-        ORDER BY s.mention_count DESC
-    """)
+    records = run_gremlin(client,
+        "g.V().hasLabel('Subject').valueMap('name','type','mention_count')"
+    )
     for rec in records:
-        print(f"    :Subject [{rec['type']:10s}] {rec['name']} (mentioned {rec['mentions']}x)")
+        name = gval(rec, "name", "")
+        stype = gval(rec, "type", "")
+        mentions = gval(rec, "mention_count", 0)
+        print(f"    :Subject [{stype:10s}] {name} (mentioned {mentions}x)")
 
     # Objects
     print("\n  Objects:")
-    records = run_cypher(driver, """
-        MATCH (o:Object)
-        RETURN o.name AS name, o.type AS type, o.mention_count AS mentions
-        ORDER BY o.mention_count DESC
-    """)
+    records = run_gremlin(client,
+        "g.V().hasLabel('Object').valueMap('name','type','mention_count')"
+    )
     for rec in records:
-        print(f"    :Object  [{rec['type']:10s}] {rec['name']} (mentioned {rec['mentions']}x)")
+        name = gval(rec, "name", "")
+        otype = gval(rec, "type", "")
+        mentions = gval(rec, "mention_count", 0)
+        print(f"    :Object  [{otype:10s}] {name} (mentioned {mentions}x)")
 
-    # Edges: MENTIONS (Document → Subject)
+    # Edges: MENTIONS
     print("\n  Edges (MENTIONS — Document → Subject):")
-    records = run_cypher(driver, """
-        MATCH (d:Document)-[r:MENTIONS]->(s:Subject)
-        RETURN d.name AS doc, s.name AS subject, r.context AS context
-        ORDER BY d.name, s.name
-    """)
+    records = run_gremlin(client,
+        "g.V().hasLabel('Document').outE('MENTIONS')"
+        ".project('doc','subject','context')"
+        ".by(outV().values('name'))"
+        ".by(inV().values('name'))"
+        ".by(coalesce(values('context'), constant('')))"
+    )
     for rec in records:
         ctx = (rec.get("context") or "")[:50]
-        print(f"    {rec['doc']} —[MENTIONS]→ {rec['subject']}  ({ctx})")
+        print(f"    {rec.get('doc','')} —[MENTIONS]→ {rec.get('subject','')}  ({ctx})")
 
-    # Edges: RELATES_TO (Subject → Object)
+    # Edges: RELATES_TO
     print("\n  Edges (RELATES_TO — Subject → Object):")
-    records = run_cypher(driver, """
-        MATCH (s:Subject)-[r:RELATES_TO]->(o:Object)
-        RETURN s.name AS subject, r.predicate AS predicate, o.name AS object
-        ORDER BY s.name
-    """)
+    records = run_gremlin(client,
+        "g.V().hasLabel('Subject').outE('RELATES_TO')"
+        ".project('subject','predicate','object')"
+        ".by(outV().values('name'))"
+        ".by(values('predicate'))"
+        ".by(inV().values('name'))"
+    )
     for rec in records:
-        print(f"    {rec['subject']} —[{rec['predicate']}]→ {rec['object']}")
+        print(f"    {rec.get('subject','')} —[{rec.get('predicate','')}]→ {rec.get('object','')}")
 
     # Count summary
     print(f"\n  Summary:")
     for label in ["Document", "Subject", "Object"]:
-        count = run_cypher(driver, f"MATCH (n:{label}) RETURN count(n) AS c")[0]["c"]
-        print(f"    {label} nodes: {count}")
+        count_result = run_gremlin(client, f"g.V().hasLabel('{label}').count()")
+        count = count_result[0] if count_result else 0
+        print(f"    {label} vertices: {count}")
     for rel_type in ["MENTIONS", "RELATES_TO"]:
-        edge_count = run_cypher(
-            driver,
-            f"MATCH ()-[r:{rel_type}]->() RETURN count(r) AS c",
-        )[0]["c"]
-        print(f"    {rel_type} edges: {edge_count}")
+        count_result = run_gremlin(client, f"g.E().hasLabel('{rel_type}').count()")
+        count = count_result[0] if count_result else 0
+        print(f"    {rel_type} edges: {count}")
 
     print(f"{'=' * 70}")
 
@@ -1224,15 +1182,15 @@ def main():
     chunk_summaries = {}
 
     # Step 5: Build graph
-    print("\n[Step 5] Building Lexical Graph in Neo4j (Document → Subject → Object, no Chunk nodes)...")
-    driver = get_neo4j_driver()
+    print("\n[Step 5] Building Lexical Graph in Cosmos DB (indigokg/knowledgegraph)...")
+    gremlin = get_gremlin_client()
     build_lexical_graph(
         documents, all_chunks, spo_by_chunk, deduped,
-        doc_summaries, chunk_summaries, driver,
+        doc_summaries, chunk_summaries, gremlin,
     )
 
     # Step 6: Visualize
-    visualize_lexical_graph(driver)
+    visualize_lexical_graph(gremlin)
 
     # Step 7: Demo queries
     demo_questions = [
@@ -1245,13 +1203,13 @@ def main():
     print("\n\n[Step 7] Running demo queries...")
     for q in demo_questions:
         results = query_lexical_graph(
-            q, driver, lance_table, embedding_client, top_k=3
+            q, gremlin, lance_table, embedding_client, top_k=3
         )
         print_query_results(q, results)
 
-    driver.close()
-    print("\nDone! View your Lexical Graph at http://localhost:7474")
-    print("Try: MATCH (d:Document)-[:MENTIONS]->(s:Subject)-[:RELATES_TO]->(o:Object) RETURN d, s, o")
+    gremlin.close()
+    print("\nDone! Lexical Graph stored in Cosmos DB (indigokg / knowledgegraph).")
+    print("Query with Gremlin: g.V().hasLabel('Document').out('MENTIONS').out('RELATES_TO').valueMap(true)")
 
 
 if __name__ == "__main__":
