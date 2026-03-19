@@ -1,0 +1,36 @@
+# Unique identifier/name for this agent
+name: planner-agent
+# Brief description of what this agent does
+description: >
+  A planning agent for IndiGo Airlines data analysis that explores a Cosmos DB
+  knowledge graph ontology and produces structured plans of action. Demonstrates
+  local Python tool execution with Gremlin DB connectivity — a key advantage of
+  code-based hosted agents over prompt agents.
+metadata:
+  authors:
+    - Microsoft
+  tags:
+    - Azure AI AgentServer
+    - Microsoft Agent Framework
+    - Local Tools
+    - Knowledge Graph
+    - Cosmos DB Gremlin
+    - Planning Agent
+template:
+  name: planner-agent
+  kind: hosted
+  protocols:
+    - protocol: responses
+  environment_variables:
+    - name: PROJECT_ENDPOINT
+      value: ${AZURE_AI_PROJECT_ENDPOINT}
+    - name: MODEL_DEPLOYMENT_NAME
+      value: "{{chat}}"
+    - name: COSMOS_DB_ENDPOINT
+      value: ${COSMOS_DB_ENDPOINT}
+    - name: COSMOS_DB_KEY
+      value: ${COSMOS_DB_KEY}
+resources:
+  - kind: model
+    id: gpt-4.1-mini
+    name: chat

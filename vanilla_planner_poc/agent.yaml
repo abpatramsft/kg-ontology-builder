@@ -1,0 +1,37 @@
+# Unique identifier/name for this agent
+name: vanilla-planner-agent
+# Brief description of what this agent does
+description: >
+  A custom (no-framework) planning agent for IndiGo Airlines data analysis.
+  Uses a ReAct loop to explore a Cosmos DB knowledge graph ontology and
+  produce structured plans of action. Built with FoundryCBAgent for direct
+  Responses API compatibility.
+metadata:
+  authors:
+    - Microsoft
+  tags:
+    - Azure AI AgentServer
+    - FoundryCBAgent
+    - Custom Agent
+    - Knowledge Graph
+    - Cosmos DB Gremlin
+    - Planning Agent
+    - ReAct
+template:
+  name: vanilla-planner-agent
+  kind: hosted
+  protocols:
+    - protocol: responses
+  environment_variables:
+    - name: PROJECT_ENDPOINT
+      value: ${AZURE_AI_PROJECT_ENDPOINT}
+    - name: MODEL_DEPLOYMENT_NAME
+      value: "{{chat}}"
+    - name: COSMOS_DB_ENDPOINT
+      value: ${COSMOS_DB_ENDPOINT}
+    - name: COSMOS_DB_KEY
+      value: ${COSMOS_DB_KEY}
+resources:
+  - kind: model
+    id: gpt-4.1
+    name: chat
