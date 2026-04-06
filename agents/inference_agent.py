@@ -35,7 +35,7 @@ Usage:
 
     # Or programmatic usage:
     from agents.inference_agent import InferenceAgent, build_tools
-    tools = build_tools(gremlin_client, lance_table, embedding_client, db_path)
+    tools = build_tools(gremlin_client, vector_container, embedding_client, db_path)
     agent = InferenceAgent(llm_client, tools)
     answer = agent.run("Which suppliers provide parts for the A320neo landing gear?")
 """
@@ -61,8 +61,14 @@ from utils.cosmos_helpers import (
     get_gremlin_client, run_gremlin,
     esc, make_vertex_id, gval,
 )
-
-import lancedb
+from utils.cosmos_vector_helpers import (
+    vector_search,
+    vector_search_filtered,
+    get_chunk,
+    get_chunks_by_doc,
+    get_collection_stats,
+    get_vector_container,
+)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -444,7 +450,7 @@ class GraphOntologyTool:
 
 class VectorSearchTool:
     """
-    Read-only tool for semantic and filtered searches over the LanceDB
+    Read-only tool for semantic and filtered searches over the Cosmos DB
     document chunk store.
 
     Supported actions:
@@ -457,7 +463,7 @@ class VectorSearchTool:
 
     NAME = "vector_search_tool"
     TOOL_DESCRIPTION = textwrap.dedent("""\
-    vector_search_tool — Semantic & filtered search over the LanceDB document store.
+    vector_search_tool — Semantic & filtered search over the Cosmos DB document store.
 
     Use this tool to find relevant document passages after you've used
     graph_ontology_tool to identify which documents/subjects to look at.
@@ -482,8 +488,8 @@ class VectorSearchTool:
        Returns: total chunk count, document count, and table metadata.
     """)
 
-    def __init__(self, table: lancedb.table.Table, embedding_client):
-        self.table = table
+    def __init__(self, container, embedding_client):
+        self.container = container
         self.embedding_client = embedding_client
 
     def execute(self, action_input: dict) -> str:
@@ -521,30 +527,22 @@ class VectorSearchTool:
             return "ERROR: 'query' parameter is required."
 
         q_embedding = embed_texts(self.embedding_client, [query])[0]
-        total = len(self.table)
-        n = min(n, total)
-        if n == 0:
-            return json.dumps({"results": [], "message": "Table is empty"})
+        results = vector_search(self.container, q_embedding, top_k=n)
 
-        results = (
-            self.table.search(q_embedding)
-            .metric("cosine")
-            .limit(n)
-            .to_list()
-        )
+        if not results:
+            return json.dumps({"results": [], "message": "No results found"})
 
         output = []
         for row in results:
-            score = round(1 - row["_distance"], 4)
             output.append({
                 "chunk_id": row["chunk_id"],
-                "similarity_score": score,
+                "similarity_score": round(row.get("similarity_score", 0), 4),
                 "text": row["text"],
                 "metadata": {
                     "doc_name": row["doc_name"],
                     "chunk_index": row["chunk_index"],
-                    "text_preview": row["text_preview"],
-                    "char_count": row["char_count"],
+                    "text_preview": row.get("text_preview", row["text"][:200]),
+                    "char_count": row.get("char_count", len(row["text"])),
                 },
             })
         return json.dumps({"results": output}, indent=2)
@@ -556,21 +554,13 @@ class VectorSearchTool:
             return "ERROR: 'doc_name' parameter is required for filtered search."
 
         q_embedding = embed_texts(self.embedding_client, [query])[0]
-
-        results = (
-            self.table.search(q_embedding)
-            .metric("cosine")
-            .where(f"doc_name = '{doc_name}'", prefilter=True)
-            .limit(n)
-            .to_list()
-        )
+        results = vector_search_filtered(self.container, q_embedding, doc_name, top_k=n)
 
         output = []
         for row in results:
-            score = round(1 - row["_distance"], 4)
             output.append({
                 "chunk_id": row["chunk_id"],
-                "similarity_score": score,
+                "similarity_score": round(row.get("similarity_score", 0), 4),
                 "text": row["text"],
                 "metadata": {
                     "doc_name": row["doc_name"],
@@ -580,47 +570,39 @@ class VectorSearchTool:
         return json.dumps({"results": output, "filter": f"doc_name='{doc_name}'"}, indent=2)
 
     def _get_chunk(self, chunk_id: str) -> str:
-        df = self.table.to_pandas()
-        match = df[df["chunk_id"] == chunk_id]
-        if match.empty:
+        row = get_chunk(self.container, chunk_id)
+        if row is None:
             return f"ERROR: Chunk '{chunk_id}' not found."
 
-        row = match.iloc[0]
         return json.dumps({
             "chunk_id": row["chunk_id"],
             "text": row["text"],
             "metadata": {
                 "doc_name": row["doc_name"],
                 "chunk_index": int(row["chunk_index"]),
-                "text_preview": row["text_preview"],
-                "char_count": int(row["char_count"]),
+                "text_preview": row.get("text_preview", row["text"][:200]),
+                "char_count": int(row.get("char_count", len(row["text"]))),
             },
         }, indent=2)
 
     def _get_chunks_by_doc(self, doc_name: str) -> str:
-        df = self.table.to_pandas()
-        doc_df = df[df["doc_name"] == doc_name].sort_values("chunk_index")
-        if doc_df.empty:
+        rows = get_chunks_by_doc(self.container, doc_name)
+        if not rows:
             return f"ERROR: No chunks found for document '{doc_name}'."
 
         chunks = []
-        for _, row in doc_df.iterrows():
+        for row in rows:
             chunks.append({
                 "chunk_id": row["chunk_id"],
                 "chunk_index": int(row["chunk_index"]),
                 "text_preview": row["text"][:300],
-                "char_count": int(row["char_count"]),
+                "char_count": int(row.get("char_count", len(row["text"]))),
             })
         return json.dumps({"doc_name": doc_name, "chunks": chunks, "count": len(chunks)}, indent=2)
 
     def _get_collection_stats(self) -> str:
-        df = self.table.to_pandas()
-        doc_names = sorted(df["doc_name"].unique().tolist())
-        return json.dumps({
-            "total_chunks": len(df),
-            "documents": len(doc_names),
-            "document_names": doc_names,
-        }, indent=2)
+        stats = get_collection_stats(self.container)
+        return json.dumps(stats, indent=2)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1126,11 +1108,11 @@ class InferenceAgent:
 #  Helper: Build all tools
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def build_tools(gremlin_client, lance_table, embedding_client, db_path: str) -> dict:
+def build_tools(gremlin_client, vector_container, embedding_client, db_path: str) -> dict:
     """Build and return the tool dict for the InferenceAgent."""
     return {
         "graph_ontology_tool": GraphOntologyTool(gremlin_client),
-        "vector_search_tool":  VectorSearchTool(lance_table, embedding_client),
+        "vector_search_tool":  VectorSearchTool(vector_container, embedding_client),
         "sql_query_tool":      SQLQueryTool(db_path),
     }
 
@@ -1158,15 +1140,13 @@ def main():
         print("    Check COSMOS_DB_KEY in your .env file.")
         return
 
-    print("[2/4] Connecting to LanceDB...")
-    lance_db_path = os.path.join(BASE_DIR, "source_data", "lancedb_store")
-    db = lancedb.connect(lance_db_path)
+    print("[2/4] Connecting to Cosmos DB vector store...")
+    vector_container = get_vector_container()
     try:
-        lance_table = db.open_table("lexical_chunks")
-        print(f"  ✓ LanceDB table 'lexical_chunks' ({len(lance_table)} rows)")
+        stats = get_collection_stats(vector_container)
+        print(f"  ✓ Cosmos DB vector store ({stats['total_chunks']} chunks)")
     except Exception as e:
-        print(f"  ✗ LanceDB open failed: {e}")
-        print("    Run the lexical_graph pipeline first to create the table.")
+        print(f"  ✗ Cosmos DB vector store failed: {e}")
         return
 
     print("[3/4] Initializing Azure OpenAI clients...")
@@ -1183,7 +1163,7 @@ def main():
     print(f"  ✓ SQLite database: {db_path}")
 
     # ── Build tools and agent ──────────────────────────────────────────
-    tools = build_tools(gremlin, lance_table, embedding_client, db_path)
+    tools = build_tools(gremlin, vector_container, embedding_client, db_path)
     print(f"\n  Tools loaded: {', '.join(tools.keys())}")
     print("-" * 70)
     print("  Type your question and press Enter. Type 'quit' or 'exit' to stop.")

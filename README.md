@@ -22,7 +22,7 @@ Unstructured Sources          Structured Sources         Structured Sources
                     │
               [Inference Agent]  ← Layer 4 ✅
               graph_ontology_tool  │  vector_search_tool  │  sql_query_tool
-              (Cosmos DB Gremlin)  │  (LanceDB)           │  (SQLite)
+              (Cosmos DB Gremlin)  │  (Cosmos DB NoSQL)   │  (SQLite)
 ```
 
 | Layer | Source | What it captures | Status |
@@ -67,7 +67,7 @@ KG_ontology_generation/
 │   ├── airlines.db                  # SQLite DB (auto-created): 12 tables from CSVs + invoices
 │   ├── maintenance_incidents.txt    # Copied from source_data_files/ by setup script
 │   ├── operational_report.txt       # Copied from source_data_files/ by setup script
-│   └── lancedb_store/               # LanceDB vector DB (auto-created by Layer 2)
+│   └── setup_vector_db.py            # Provisions Cosmos DB vector container + ingests embedded chunks
 │
 ├── src/                             # Pipeline execution code
 │   ├── __init__.py
@@ -78,6 +78,7 @@ KG_ontology_generation/
 │   │   ├── __init__.py
 │   │   ├── llm.py                   # Azure OpenAI LLM + embedding client helpers
 │   │   ├── cosmos_helpers.py        # Cosmos DB Gremlin client, read/write helpers, esc(), make_vertex_id(), gval()
+│   │   ├── cosmos_vector_helpers.py # Cosmos DB NoSQL vector search operations (search, retrieve, upsert)
 │   │   ├── neo4j_helpers.py         # Legacy Neo4j helpers (no longer imported — kept for reference)
 │   │   └── pdf_extractor.py         # PDF → JSON extraction via Azure OpenAI GPT-4.1 vision
 │   │
@@ -219,6 +220,28 @@ Key FK chains:
 - `incidents → flights, aircraft`
 - `maintenance → aircraft`
 
+### 5. Vector DB Setup
+
+After creating the SQLite database and copying text files, provision the Cosmos DB NoSQL vector store and populate it with embedded document chunks:
+
+```bash
+python source_data/setup_vector_db.py
+```
+
+This script:
+1. **Provisions Cosmos DB** — creates the `lexical_vector_db` database and `lexical_chunks` container with vector index policy (idempotent — skips if already exists)
+2. **Chunks documents** — loads `.txt` files from `source_data/` and splits them into sections using the same section-based chunker as `lexical_graph.py`
+3. **Generates embeddings** — embeds all chunks via Azure OpenAI `text-embedding-3-small` (1536 dimensions)
+4. **Upserts to Cosmos DB** — stores all chunks with embeddings into the container, ready for vector similarity search
+
+| Setting | Value |
+|---|---|
+| Endpoint | `https://cosmosdb-vectors.documents.azure.com:443/` |
+| Database | `lexical_vector_db` |
+| Container | `lexical_chunks` |
+| Partition key | `/doc_name` |
+| Vector index | `quantizedFlat` on `/embedding` (1536 dims, cosine) |
+
 ---
 
 ## Usage
@@ -312,13 +335,13 @@ python src/lexical_graph/lexical_graph.py --advanced
 
 1. **Load** — scans `source_data/` for `.txt` files
 2. **Chunk** — splits documents into sections using header/underline detection (fallback: paragraph splitting)
-3. **Embed & Store** — embeds all chunks via Azure OpenAI `text-embedding-3-small`, stores vectors + metadata in LanceDB
+3. **Connect to Vector Store** — connects to the Cosmos DB NoSQL vector store (chunks are pre-populated by `setup_vector_db.py`)
 4. **Extract SPO Triplets** — LLM extracts one **Subject-Predicate-Object** triplet per chunk (e.g., `Collins Aerospace smoke detector → reported_issue → false alarm during ground testing`)
 5. **Entity Resolution** — LLM-based cross-document entity resolution: identifies merge groups (same entity, different names) and implicit mentions (parent entity implied by product name), renames to canonical forms
 6. **Deduplicate** — merges SPO triplets by canonical subject name, accumulating multiple predicate-object contexts per subject
 7. **Summarize** — generates 1-2 sentence summaries for each document
 8. **Build Graph** — creates `Document`, `Subject`, and `Object` vertices with `MENTIONS` and `RELATES_TO` edges in Cosmos DB Gremlin (Chunk vertices are **not** stored in the graph — chunks are used internally for LLM context management and vector search only)
-9. **Query** — dual query interface: keyword graph traversal + vector similarity search via LanceDB
+9. **Query** — dual query interface: keyword graph traversal + vector similarity search via Cosmos DB NoSQL
 
 #### Cosmos DB Schema (Layer 2):
 
@@ -550,7 +573,7 @@ Fast and deterministic. Does not explore actual graph content — works purely f
 
 #### ReAct Agent (`resolve_correspondences_advanced`)
 
-A custom Reason-Act agent that iteratively explores the full Neo4j knowledge graph (both Layer 1 and Layer 2) and optionally the LanceDB vector store:
+A custom Reason-Act agent that iteratively explores the full knowledge graph (both Layer 1 and Layer 2) and optionally the Cosmos DB NoSQL vector store:
 
 ```
 THOUGHT → ACTION (graph_query_tool) → OBSERVATION → repeat → FINAL_ANSWER
@@ -562,7 +585,7 @@ The agent runs **one instance per entity** (per subject or per table, depending 
 - `list_domain_entities` — all DomainEntity nodes with domain, columns, row count
 - `get_subject_context(name)` — Subject + all Documents that MENTION it + context
 - `get_domain_entity_detail(name)` — DomainEntity + FK/semantic relationships + column info
-- `search_similar(query, n)` — semantic similarity search across LanceDB
+- `search_similar(query, n)` — semantic similarity search across Cosmos DB NoSQL vector store
 - `query_graph(gremlin)` — arbitrary read-only Gremlin traversal
 
 **How the agent works step by step:**
@@ -581,7 +604,7 @@ Typical agent run per entity: **3-5 iterations** of tool use before producing a 
 |---|---|---|
 | LLM calls per entity | 0-1 (only for ambiguous) | 4-7 (iterative exploration) |
 | Explores graph content | No | Yes (documents, relationships, paths) |
-| Uses vector search | No (uses embeddings directly) | Yes (LanceDB similarity) |
+| Uses vector search | No (uses embeddings directly) | Yes (Cosmos DB vector similarity) |
 | Cross-entity validation | No | Yes |
 | Configurable direction | Yes (`--direction`) | Yes (`--direction`) |
 | Threshold tuning | Yes (`--threshold`) | N/A (agent decides confidence) |
@@ -590,7 +613,7 @@ Typical agent run per entity: **3-5 iterations** of tool use before producing a 
 
 ### Inference Agent
 
-The inference agent (`agents/inference_agent.py`) is a ReAct agent that navigates the full 3-layer knowledge graph, LanceDB vector store, and SQLite database to answer natural language questions.
+The inference agent (`agents/inference_agent.py`) is a ReAct agent that navigates the full 3-layer knowledge graph, Cosmos DB NoSQL vector store, and SQLite database to answer natural language questions.
 
 ```bash
 python agents/inference_agent.py
@@ -601,7 +624,7 @@ python agents/inference_agent.py
 | Tool | Backend | Actions |
 |---|---|---|
 | **`graph_ontology_tool`** | Cosmos DB Gremlin | `list_node_labels`, `list_relationship_types`, `list_domain_entities`, `list_subjects` (with SPO triplets), `list_documents`, `get_domain_entity_detail` (includes linked Concept vertices), `get_subject_context` (with RELATES_TO), `get_correspondences`, `find_path`, `query_graph` (accepts Gremlin) |
-| **`vector_search_tool`** | LanceDB | `search(query, n)` — semantic similarity search across all embedded document chunks; `search_by_document(query, doc_name, n)` — filtered search within a specific document |
+| **`vector_search_tool`** | Cosmos DB NoSQL | `search(query, n)` — semantic similarity search across all embedded document chunks; `search_by_document(query, doc_name, n)` — filtered search within a specific document |
 | **`sql_query_tool`** | SQLite | `list_tables`, `describe_table`, `query(sql)` — read-only SQL access to the structured data |
 
 The agent combines evidence from all three sources in a single reasoning chain, producing a grounded final answer with citations.
@@ -711,7 +734,7 @@ g.E().groupCount().by(label())
 | Component | Technology | Role |
 |---|---|---|
 | Graph DB | Azure Cosmos DB (Gremlin API) | Stores the KG ontology (all 3 layers in `indigokg/knowledgegraph`) |
-| Vector DB | LanceDB (local, on-disk) | Chunk embeddings + similarity search (Layer 2) |
+| Vector DB | Azure Cosmos DB (NoSQL API) | Chunk embeddings + vector similarity search via `VectorDistance` (Layer 2) |
 | Structured DB | SQLite (stdlib) | Source data for Layer 1 (`source_data/airlines.db` — 12 tables + invoices) |
 | LLM | Azure OpenAI GPT-4.1 | Schema enrichment + concept extraction/normalization + entity extraction + inference |
 | Embeddings | Azure OpenAI text-embedding-3-small | Chunk vectorization for Layer 2 |

@@ -984,19 +984,18 @@ def main():
         print("\n[Step 3] Resolving correspondences with ReAct Agent (iterative exploration)...")
         from agents.subject_agent import resolve_correspondences_advanced
 
-        # Open LanceDB for the agent's vector search tool
-        import lancedb
-        lance_db = lancedb.connect(os.path.join(PROJECT_ROOT, "source_data", "lancedb_store"))
+        # Connect to Cosmos DB vector store for the agent's vector search tool
+        from utils.cosmos_vector_helpers import get_vector_container
         try:
-            lance_table = lance_db.open_table("lexical_chunks")
+            vector_container = get_vector_container()
         except Exception as e:
-            print(f"  WARN: Could not open LanceDB table: {e}")
+            print(f"  WARN: Could not connect to Cosmos DB vector store: {e}")
             print("  The advanced agent will work without vector search.")
-            lance_table = None
+            vector_container = None
 
         correspondences = resolve_correspondences_advanced(
             subjects, domain_entities, llm_client, gremlin,
-            lance_table=lance_table, embedding_client=embedding_client,
+            vector_container=vector_container, embedding_client=embedding_client,
             direction=args.direction,
         )
     else:

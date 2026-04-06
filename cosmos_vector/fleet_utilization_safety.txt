@@ -1,0 +1,114 @@
+IndiGo Airlines — Fleet Utilization & Safety Performance Review (FY 2024-25)
+=============================================================================
+
+Compiled by: Chief Operations Office & Continuing Airworthiness Management, IndiGo Airlines
+Review Period: April 2024 – March 2025
+Classification: Internal Use Only
+
+Aircraft Utilization Summary
+------------------------------
+
+The IndiGo fleet averaged 11.2 block hours per aircraft per day during FY 2024-25, ranking
+among the highest utilization rates for low-cost carriers in the Asia-Pacific region. The
+A320 sub-fleet (including AC001/VT-INA, AC010/VT-INJ, and AC011/VT-INK) averaged 11.8
+hours daily, driven by high-frequency trunk routes such as the DEL-BOM corridor (flight
+6E-201, route R001) and the BLR-HYD sector (flight 6E-205, route R005).
+
+Aircraft AC001 (VT-INA, A320neo) recorded the highest individual utilization at 4,287
+block hours across 2,314 cycles for the year. Its primary assignment on the DEL-BOM route
+meant an average of six daily sectors, with Capt. Anil Kapoor (CR001) commanding 22% of
+those sectors. Despite heavy utilization, AC001 achieved a 99.6% dispatch reliability rate,
+with only two technical delays — both attributed to minor APU faults resolved within
+30 minutes by the DEL line maintenance team.
+
+Aircraft AC003 (VT-INC, A321neo) logged 3,890 block hours. Following the Pratt & Whitney
+hot section inspection at MRO-SIN (maintenance record M003) in January 2024, the engine
+performed within nominal parameters for the remainder of the year. However, a second
+unscheduled engine inspection was triggered in November 2024 after an in-flight engine
+vibration alert on flight F009 (DEL-DXB route R009). The aircraft was ferried to MRO-SIN
+and returned to service after 18 days, with a fan blade erosion finding documented under
+maintenance record M021. Cost impact: INR 82,00,000.
+
+ATR Fleet Regional Operations
+-------------------------------
+
+The ATR 72-600 sub-fleet (AC015/VT-INO, AC016/VT-INP, AC017/VT-INQ) operated 14,200
+revenue sectors across 38 regional routes during the year. Average daily utilization was
+8.4 block hours per aircraft — lower than the A320 fleet due to shorter sector lengths and
+limited night operations at regional airports.
+
+Aircraft AC015 (VT-INO) completed its scheduled A-Check (M005) at IndiGo Hangar-HYD on
+April 14, 2024 as planned. The inspection confirmed the brake pad replacement performed
+in January had resolved the wear issue. A subsequent B-Check in October 2024 (M018) at
+the same facility revealed a propeller blade surface crack on the #1 engine, requiring blade
+replacement under warranty from the PW127M manufacturer. Technician TEC007 led the repair,
+which was completed in 5 days with a cost of INR 12,50,000.
+
+New inductee AC017 (VT-INQ), delivered in August 2024, was assigned to the HYD-VTZ-MAA
+triangle serving Vizag and Chennai. First Officer Priya Nair (CR002, EMP10002) flew 32 of
+AC017's initial revenue sectors as part of her route familiarization ahead of the command
+upgrade evaluation.
+
+Safety Performance Indicators
+-------------------------------
+
+IndiGo recorded 58 safety incidents across the fleet in FY 2024-25, down from 71 in the
+prior year — a 18.3% improvement. The incident rate declined to 0.42 per 1,000 flight hours
+from 0.52, maintaining the airline well below the industry benchmark of 1.2.
+
+Category breakdown:
+  - ATC / Ground delays: 22 incidents (37.9%) — DEL remained the primary contributor,
+    consistent with the pattern established in I001 (January 2024). The proposed schedule
+    adjustment for flight 6E-201 (shifting departure by 15 minutes) was implemented in
+    October 2024 and reduced morning slot conflicts at DEL by 40%.
+
+  - Bird / Wildlife strikes: 9 incidents (15.5%) — The January 2024 bird strike on AC005
+    (incident I003) was the only event requiring more than overnight grounding. A new
+    bird scaring system was installed at BLR Kempegowda runway 09R in June 2024, reducing
+    strike events at BLR by 60% in H2 compared to H1.
+
+  - Technical / Mechanical: 14 incidents (24.1%) — The hydraulic leak on AC010 (I005) and
+    the fan blade erosion on AC003 (M021) were the two most significant events. AC010
+    underwent a full hydraulic system overhaul during its C-Check in September 2024 (M019)
+    at Air India Engineering DEL, which replaced all flexible hydraulic hoses and connectors
+    fleet-wide as a preventive measure. Cost: INR 1,20,00,000 across the A320 fleet.
+
+  - Weather-related diversions: 8 incidents (13.8%) — Concentrated in the July–September
+    monsoon season, primarily affecting arrivals into BOM (Chhatrapati Shivaji Maharaj
+    International Airport) and GOI (Dabolim Airport / Manohar International Airport).
+
+  - Cabin safety events: 5 incidents (8.6%) — Including one turbulence injury on the
+    DEL-DXB route in December 2024. Senior cabin crew Rahul Verma (CR006, EMP10006)
+    was commended for rapid first-aid response; the passenger was transferred to Dubai
+    medical services upon landing.
+
+Passenger Impact & Service Recovery
+--------------------------------------
+
+Passenger Aarav Sharma (P001, Platinum tier, FF100001) was affected by the AC003 schedule
+disruption in November 2024 (M021 engine event). His DEL-DXB booking on flight F009 was
+re-accommodated onto a partner airline within 4 hours. As a Platinum frequent flyer, he
+received a complimentary Business Plus upgrade on his return sector and 5,000 bonus loyalty
+points. His post-event survey rated the recovery as "Excellent."
+
+Passenger Diya Patel (P002, Gold tier) experienced a second baggage irregularity in August
+2024 on the BLR-BOM route. Root cause analysis traced the issue to a barcode scanner
+malfunction at Kempegowda International Airport (BLR) baggage sorting facility. The scanner
+was replaced in September 2024, and no further baggage incidents were reported on BLR
+departures through Q4. Ms. Patel received INR 3,500 compensation and a complimentary
+lounge voucher, and her feedback in the Q4 survey indicated improved satisfaction.
+
+Fleet Planning Outlook
+------------------------
+
+IndiGo's firm order book includes 12 additional A321neo and 5 ATR 72-600 deliveries
+through FY 2025-26. The A321neo additions will primarily serve international expansion on
+routes from DEL and BOM to Southeast Asian destinations, while the ATR fleet will strengthen
+regional connectivity from HYD, BLR, and the newly operational Mopa International Airport
+(GOX) in Goa — expected to relieve congestion pressure on the legacy Dabolim Airport (GOI)
+that contributed to diversions during the monsoon season.
+
+Maintenance capacity expansion is underway with a new dedicated IndiGo MRO facility at
+Rajiv Gandhi International Airport (HYD), scheduled for operational readiness in Q3 2025.
+This facility will handle C-Checks for both A320 and ATR types, reducing dependence on
+Air India Engineering at DEL and third-party MROs in Singapore.

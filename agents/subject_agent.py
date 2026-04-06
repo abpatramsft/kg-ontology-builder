@@ -26,7 +26,7 @@ Usage:
 
     correspondences = resolve_correspondences_advanced(
         subjects, domain_entities, llm_client, driver,
-        lance_table=lance_table, embedding_client=embedding_client,
+        vector_container=vector_container, embedding_client=embedding_client,
     )
     # Returns same list format as subject_graph.resolve_correspondences_simple
 """
@@ -48,6 +48,9 @@ if SRC_DIR not in sys.path:
 
 from utils.llm import call_llm, parse_llm_json, embed_texts
 from utils.cosmos_helpers import run_gremlin, esc, make_vertex_id, gval
+from utils.cosmos_vector_helpers import (
+    vector_search as cosmos_vector_search,
+)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -95,9 +98,9 @@ class GraphQueryTool:
        Only g.V() / g.E() reads are allowed.
     """)
 
-    def __init__(self, client, lance_table=None, embedding_client=None):
+    def __init__(self, client, vector_container=None, embedding_client=None):
         self.client = client
-        self.lance_table = lance_table
+        self.vector_container = vector_container
         self.embedding_client = embedding_client
 
     def execute(self, action_input: dict) -> str:
@@ -257,27 +260,19 @@ class GraphQueryTool:
         }, indent=2)
 
     def _search_similar(self, query: str, n: int) -> str:
-        if self.lance_table is None or self.embedding_client is None:
+        if self.vector_container is None or self.embedding_client is None:
             return "ERROR: Vector store not available. Use other actions to explore the graph."
         if not query:
             return "ERROR: 'query' parameter is required for search_similar."
         q_embedding = embed_texts(self.embedding_client, [query])[0]
-        total = len(self.lance_table)
-        n = min(n, total)
-        if n == 0:
-            return json.dumps({"results": [], "message": "Table is empty"})
-        results = (
-            self.lance_table.search(q_embedding)
-            .metric("cosine")
-            .limit(n)
-            .to_list()
-        )
+        results = cosmos_vector_search(self.vector_container, q_embedding, top_k=n)
+        if not results:
+            return json.dumps({"results": [], "message": "No results found"})
         output = []
         for row in results:
-            score = round(1 - row["_distance"], 4)
             output.append({
                 "chunk_id": row["chunk_id"],
-                "similarity_score": score,
+                "similarity_score": round(row.get("similarity_score", 0), 4),
                 "text": row["text"][:400],
                 "metadata": {"doc_name": row["doc_name"], "chunk_index": row["chunk_index"]},
             })
@@ -1072,7 +1067,7 @@ def resolve_correspondences_advanced(
     domain_entities: list[dict],
     llm_client: AzureOpenAI,
     gremlin_client,
-    lance_table=None,
+    vector_container=None,
     embedding_client=None,
     verbose: bool = True,
     validate: bool = True,
@@ -1090,7 +1085,7 @@ def resolve_correspondences_advanced(
         domain_entities:   List of domain entity dicts (from fetch_domain_entities).
         llm_client:        AzureOpenAI client for chat completions.
         gremlin_client:    Cosmos DB Gremlin client.
-        lance_table:       Optional LanceDB table for vector search.
+        vector_container:  Optional Cosmos DB container for vector search.
         embedding_client:  Optional AzureOpenAI client for embeddings.
         verbose:           Print agent reasoning trace.
         validate:          Run cross-subject validation after resolution.
@@ -1099,7 +1094,7 @@ def resolve_correspondences_advanced(
     Returns:
         [{"subject_name", "domain_entity_name", "confidence", "method", "reason"}, ...]
     """
-    tool = GraphQueryTool(gremlin_client, lance_table, embedding_client)
+    tool = GraphQueryTool(gremlin_client, vector_container, embedding_client)
     all_correspondences = []
 
     # ── Per-domain-entity direction ──────────────────────────────────────

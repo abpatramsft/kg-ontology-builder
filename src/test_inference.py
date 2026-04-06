@@ -17,17 +17,18 @@ import time
 import argparse
 from datetime import datetime
 
-# Ensure src/ is on sys.path for package imports
+# Ensure src/ and project root are on sys.path for package imports
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))       # src/
 PROJECT_ROOT = os.path.dirname(BASE_DIR)                    # repo root
 if BASE_DIR not in sys.path:
     sys.path.insert(0, BASE_DIR)
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
 
-from agent_inference import InferenceAgent, build_tools
+from agents.inference_agent import InferenceAgent, build_tools
 from utils.llm import get_llm_client, get_embedding_client
 from utils.cosmos_helpers import get_gremlin_client, run_gremlin
-
-import lancedb
+from utils.cosmos_vector_helpers import get_vector_container, get_collection_stats
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -155,15 +156,15 @@ def setup():
         print("\n  ERROR: Check COSMOS_DB_KEY in your .env file.")
         sys.exit(1)
 
-    # LanceDB
-    lance_db_path = os.path.join(PROJECT_ROOT, "source_data", "lancedb_store")
-    db = lancedb.connect(lance_db_path)
+    # Cosmos DB Vector Store
+    vector_container = get_vector_container()
     try:
-        lance_table = db.open_table("lexical_chunks")
-        print_connection_status("LanceDB", True, f"lexical_chunks — {len(lance_table)} rows")
+        stats = get_collection_stats(vector_container)
+        print_connection_status("Cosmos DB Vector Store", True,
+                               f"lexical_chunks — {stats['total_chunks']} chunks")
     except Exception as e:
-        print_connection_status("LanceDB", False, str(e))
-        print("\n  ERROR: Run the lexical_graph pipeline first.")
+        print_connection_status("Cosmos DB Vector Store", False, str(e))
+        print("\n  ERROR: Run source_data/setup_vector_db.py first.")
         sys.exit(1)
 
     # Azure OpenAI
@@ -180,7 +181,7 @@ def setup():
         sys.exit(1)
     print_connection_status("SQLite", True, db_path)
 
-    return driver, lance_table, llm_client, embedding_client, db_path
+    return driver, vector_container, llm_client, embedding_client, db_path
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -234,10 +235,10 @@ def main():
     args = parser.parse_args()
 
     # Setup connections
-    driver, lance_table, llm_client, embedding_client, db_path = setup()
+    driver, vector_container, llm_client, embedding_client, db_path = setup()
 
     # Build tools + agent
-    tools = build_tools(driver, lance_table, embedding_client, db_path)
+    tools = build_tools(driver, vector_container, embedding_client, db_path)
     agent = InferenceAgent(llm_client=llm_client, tools=tools, verbose=True)
 
     print(f"\n  Tools: {', '.join(tools.keys())}")

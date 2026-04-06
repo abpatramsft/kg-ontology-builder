@@ -31,7 +31,7 @@ Usage:
     from agents.lexical_agent import extract_spo_triplets_advanced
 
     spo_by_chunk = extract_spo_triplets_advanced(
-        chunks, llm_client, lance_table, embedding_client
+        chunks, llm_client, vector_container, embedding_client
     )
     # Returns same dict format as lexical_graph.extract_spo_triplets_simple
 """
@@ -52,8 +52,13 @@ if SRC_DIR not in sys.path:
     sys.path.insert(0, SRC_DIR)
 
 from utils.llm import call_llm, parse_llm_json, embed_texts
-
-import lancedb
+from utils.cosmos_vector_helpers import (
+    vector_search,
+    get_chunk,
+    get_chunks_by_doc,
+    list_documents,
+    get_collection_stats,
+)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -62,8 +67,8 @@ import lancedb
 
 class VectorDBQueryTool:
     """
-    Read-only tool that gives an agent access to explore a LanceDB table
-    of embedded document chunks.
+    Read-only tool that gives an agent access to explore document chunks
+    stored in Cosmos DB NoSQL with vector search.
 
     Supported actions:
       - search_similar(query, n)    → semantic similarity search
@@ -74,7 +79,7 @@ class VectorDBQueryTool:
     """
 
     TOOL_DESCRIPTION = textwrap.dedent("""\
-    vector_db_query_tool — Read-only access to the LanceDB document chunk table.
+    vector_db_query_tool — Read-only access to the Cosmos DB document chunk store.
 
     Available actions (pass as JSON):
 
@@ -98,8 +103,8 @@ class VectorDBQueryTool:
        Returns: total chunk count, document count, and table metadata.
     """)
 
-    def __init__(self, table: lancedb.table.Table, embedding_client):
-        self.table = table
+    def __init__(self, container, embedding_client):
+        self.container = container
         self.embedding_client = embedding_client
 
     def execute(self, action_input: dict) -> str:
@@ -136,47 +141,36 @@ class VectorDBQueryTool:
             return "ERROR: 'query' parameter is required for search_similar."
 
         q_embedding = embed_texts(self.embedding_client, [query])[0]
-        total = len(self.table)
-        n = min(n, total)
-        if n == 0:
-            return json.dumps({"results": [], "message": "Table is empty"})
+        results = vector_search(self.container, q_embedding, top_k=n)
 
-        results = (
-            self.table.search(q_embedding)
-            .metric("cosine")
-            .limit(n)
-            .to_list()
-        )
+        if not results:
+            return json.dumps({"results": [], "message": "No results found"})
 
         output = []
         for row in results:
-            score = round(1 - row["_distance"], 4)  # cosine similarity
             output.append({
                 "chunk_id": row["chunk_id"],
-                "similarity_score": score,
+                "similarity_score": round(row.get("similarity_score", 0), 4),
                 "text": row["text"],
                 "metadata": {
                     "doc_name": row["doc_name"],
                     "chunk_index": row["chunk_index"],
-                    "text_preview": row["text_preview"],
-                    "char_count": row["char_count"],
+                    "text_preview": row.get("text_preview", row["text"][:200]),
+                    "char_count": row.get("char_count", len(row["text"])),
                 },
             })
 
         return json.dumps({"results": output}, indent=2)
 
     def _list_documents(self) -> str:
-        df = self.table.to_pandas()
-        doc_names = sorted(df["doc_name"].unique().tolist())
+        doc_names = list_documents(self.container)
         return json.dumps({"documents": doc_names, "count": len(doc_names)}, indent=2)
 
     def _get_chunk(self, chunk_id: str) -> str:
-        df = self.table.to_pandas()
-        match = df[df["chunk_id"] == chunk_id]
-        if match.empty:
+        row = get_chunk(self.container, chunk_id)
+        if row is None:
             return f"ERROR: Chunk '{chunk_id}' not found."
 
-        row = match.iloc[0]
         return json.dumps(
             {
                 "chunk_id": row["chunk_id"],
@@ -184,38 +178,28 @@ class VectorDBQueryTool:
                 "metadata": {
                     "doc_name": row["doc_name"],
                     "chunk_index": int(row["chunk_index"]),
-                    "text_preview": row["text_preview"],
-                    "char_count": int(row["char_count"]),
+                    "text_preview": row.get("text_preview", row["text"][:200]),
+                    "char_count": int(row.get("char_count", len(row["text"]))),
                 },
             },
             indent=2,
         )
 
     def _get_chunks_by_doc(self, doc_name: str) -> str:
-        df = self.table.to_pandas()
-        doc_df = df[df["doc_name"] == doc_name].sort_values("chunk_index")
+        rows = get_chunks_by_doc(self.container, doc_name)
         chunks = []
-        for _, row in doc_df.iterrows():
+        for row in rows:
             chunks.append({
                 "chunk_id": row["chunk_id"],
                 "chunk_index": int(row["chunk_index"]),
                 "text_preview": row["text"][:300],
-                "char_count": int(row["char_count"]),
+                "char_count": int(row.get("char_count", len(row["text"]))),
             })
         return json.dumps({"doc_name": doc_name, "chunks": chunks}, indent=2)
 
     def _get_collection_stats(self) -> str:
-        df = self.table.to_pandas()
-        total = len(df)
-        doc_names = sorted(df["doc_name"].unique().tolist())
-        return json.dumps(
-            {
-                "total_chunks": total,
-                "documents": len(doc_names),
-                "document_names": doc_names,
-            },
-            indent=2,
-        )
+        stats = get_collection_stats(self.container)
+        return json.dumps(stats, indent=2)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -759,7 +743,7 @@ def validate_extraction(
 def extract_spo_triplets_advanced(
     chunks: list[dict],
     llm_client: AzureOpenAI,
-    lance_table: lancedb.table.Table,
+    vector_container,
     embedding_client,
     verbose: bool = True,
     validate: bool = True,
@@ -780,7 +764,7 @@ def extract_spo_triplets_advanced(
     Args:
         chunks:           List of chunk dicts (chunk_id, doc_name, text, index).
         llm_client:       AzureOpenAI client for chat completions.
-        lance_table:      LanceDB table with embedded chunks.
+        vector_container: Cosmos DB container client for vector search.
         embedding_client: AzureOpenAI client for embeddings.
         verbose:          Print agent reasoning trace.
         validate:         Run cross-document validation after extraction.
@@ -789,7 +773,7 @@ def extract_spo_triplets_advanced(
         {chunk_id: {"subject": str, "subject_type": str, "predicate": str,
                     "object": str, "object_type": str}}
     """
-    tool = VectorDBQueryTool(lance_table, embedding_client)
+    tool = VectorDBQueryTool(vector_container, embedding_client)
     spo_by_chunk = {}
 
     # Group chunks by document

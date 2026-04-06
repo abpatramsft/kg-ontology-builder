@@ -5,8 +5,8 @@ agent-framework-core==1.0.0rc3
 azure-ai-agentserver-agentframework==1.0.0b16
 azure-ai-agentserver-core==1.0.0b16
 gremlinpython>=3.7.0
-lancedb>=0.29.0
-pyarrow>=15.0.0
+azure-cosmos>=4.7.0
+requests
 pandas
 flask
 pypdfium2

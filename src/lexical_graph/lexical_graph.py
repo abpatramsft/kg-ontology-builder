@@ -46,9 +46,6 @@ if SRC_DIR not in sys.path:
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-import lancedb
-import pyarrow as pa
-
 from utils.llm import (
     get_llm_client,
     call_llm,
@@ -60,11 +57,13 @@ from utils.cosmos_helpers import (
     get_gremlin_client, run_gremlin, run_gremlin_write,
     esc, make_vertex_id, gval,
 )
+from utils.cosmos_vector_helpers import (
+    get_vector_container,
+    vector_search as cosmos_vector_search,
+)
 
 # ─── Configuration ───────────────────────────────────────────────────────────
 DATA_DIR = os.path.join(PROJECT_ROOT, "source_data")
-LANCEDB_DIR = os.path.join(DATA_DIR, "lancedb_store")
-TABLE_NAME = "lexical_chunks"
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -195,50 +194,12 @@ def print_chunks(all_chunks: list[dict]):
 #  Step 3 — Embed & Store in LanceDB
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def init_lancedb(db_dir: str = LANCEDB_DIR) -> lancedb.DBConnection:
-    """Create or open a persistent LanceDB database."""
-    os.makedirs(db_dir, exist_ok=True)
-    return lancedb.connect(db_dir)
-
-
-def store_chunks_in_vectordb(
-    lance_db: lancedb.DBConnection,
-    embedding_client,
-    chunks: list[dict],
-) -> lancedb.table.Table:
-    """
-    Embed all chunks and store in LanceDB.
-
-    Returns the LanceDB table.
-    """
-    # Drop existing table if it exists (clean rebuild)
-    try:
-        lance_db.drop_table(TABLE_NAME)
-        print("  Cleared existing LanceDB table.")
-    except Exception:
-        pass
-
-    # Embed all chunk texts
-    texts = [c["text"] for c in chunks]
-    print(f"  Embedding {len(texts)} chunks via Azure OpenAI...")
-    embeddings = embed_texts(embedding_client, texts)
-
-    # Build records as list-of-dicts (LanceDB native format)
-    records = []
-    for i, c in enumerate(chunks):
-        records.append({
-            "chunk_id": c["chunk_id"],
-            "doc_name": c["doc_name"],
-            "chunk_index": c["index"],
-            "text": c["text"],
-            "text_preview": c["text"][:200],
-            "char_count": len(c["text"]),
-            "vector": embeddings[i],
-        })
-
-    table = lance_db.create_table(TABLE_NAME, data=records)
-    print(f"  Stored {len(records)} chunks in LanceDB (table: {TABLE_NAME})")
-    return table
+# ═══════════════════════════════════════════════════════════════════════════════
+#  Step 3 — Vector DB is now pre-populated during setup
+#           (see source_data/setup_vector_db.py)
+#           Chunks are stored in Cosmos DB NoSQL with vector index.
+#           No LanceDB initialization needed here.
+# ═══════════════════════════════════════════════════════════════════════════════
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -823,7 +784,7 @@ def build_lexical_graph(
 def query_lexical_graph(
     question: str,
     client=None,
-    lance_table=None,
+    vector_container=None,
     embedding_client=None,
     top_k: int = 5,
 ) -> dict:
@@ -950,18 +911,13 @@ def query_lexical_graph(
                     "source_path": gval(rec, "source_path", ""),
                 })
 
-    # ── 2. Vector similarity (LanceDB) ───────────────────────────────
-    if lance_table is not None and embedding_client:
+    # ── 2. Vector similarity (Cosmos DB) ───────────────────────────────
+    if vector_container is not None and embedding_client:
         q_embedding = embed_texts(embedding_client, [question])[0]
-        lance_results = (
-            lance_table.search(q_embedding)
-            .metric("cosine")
-            .limit(top_k)
-            .to_list()
-        )
+        cosmos_results = cosmos_vector_search(vector_container, q_embedding, top_k=top_k)
 
-        for row in lance_results:
-            score = round(1 - row["_distance"], 4)  # cosine similarity
+        for row in cosmos_results:
+            score = round(row.get("similarity_score", 0), 4)
             result["vector_results"].append({
                 "chunk_id": row["chunk_id"],
                 "text": row["text"][:300],
@@ -969,8 +925,8 @@ def query_lexical_graph(
                 "metadata": {
                     "doc_name": row["doc_name"],
                     "chunk_index": row["chunk_index"],
-                    "text_preview": row["text_preview"],
-                    "char_count": row["char_count"],
+                    "text_preview": row.get("text_preview", row["text"][:200]),
+                    "char_count": row.get("char_count", len(row["text"])),
                 },
             })
 
@@ -1140,11 +1096,11 @@ def main():
         all_chunks.extend(doc_chunks)
     print_chunks(all_chunks)
 
-    # Step 3: Embed & store in LanceDB
-    print("\n[Step 3] Embedding chunks & storing in LanceDB...")
+    # Step 3: Connect to Cosmos DB vector store (pre-populated by setup_vector_db.py)
+    print("\n[Step 3] Connecting to Cosmos DB vector store...")
     embedding_client = get_embedding_client()
-    lance_db = init_lancedb()
-    lance_table = store_chunks_in_vectordb(lance_db, embedding_client, all_chunks)
+    vector_container = get_vector_container()
+    print("  Connected to Cosmos DB vector store")
 
     # Step 4: Extract SPO triplets
     llm_client = get_llm_client()
@@ -1152,7 +1108,7 @@ def main():
         print("\n[Step 4] Extracting SPO triplets with ReAct Agent (iterative exploration)...")
         from agents.lexical_agent import extract_spo_triplets_advanced
         spo_by_chunk = extract_spo_triplets_advanced(
-            all_chunks, llm_client, lance_table, embedding_client
+            all_chunks, llm_client, vector_container, embedding_client
         )
     else:
         print("\n[Step 4] Extracting SPO triplets with LLM (single-shot per chunk)...")
@@ -1203,7 +1159,7 @@ def main():
     print("\n\n[Step 7] Running demo queries...")
     for q in demo_questions:
         results = query_lexical_graph(
-            q, gremlin, lance_table, embedding_client, top_k=3
+            q, gremlin, vector_container, embedding_client, top_k=3
         )
         print_query_results(q, results)
 

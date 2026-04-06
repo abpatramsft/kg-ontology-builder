@@ -34,8 +34,7 @@ from agents.inference_agent import (
 )
 from utils.llm import get_llm_client, get_embedding_client, embed_texts
 from utils.cosmos_helpers import get_gremlin_client, run_gremlin
-
-import lancedb
+from utils.cosmos_vector_helpers import get_vector_container, get_collection_stats
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -168,7 +167,7 @@ app = Flask(__name__, template_folder=os.path.join(BASE_DIR, "templates"))
 
 # Globals — initialized once at startup
 _gremlin = None
-_lance_table = None
+_vector_container = None
 _llm_client = None
 _embedding_client = None
 _db_path = None
@@ -177,18 +176,17 @@ _tools = None
 
 def init_resources():
     """Connect to all data sources once at startup."""
-    global _gremlin, _lance_table, _llm_client, _embedding_client, _db_path, _tools
+    global _gremlin, _vector_container, _llm_client, _embedding_client, _db_path, _tools
 
     print("[1/4] Connecting to Cosmos DB (Gremlin)...")
     _gremlin = get_gremlin_client()
     run_gremlin(_gremlin, "g.V().limit(1).count()")
     print("  OK (indigokg/knowledgegraph)")
 
-    print("[2/4] Connecting to LanceDB...")
-    lance_db_path = os.path.join(PROJECT_ROOT, "source_data", "lancedb_store")
-    db = lancedb.connect(lance_db_path)
-    _lance_table = db.open_table("lexical_chunks")
-    print(f"  OK ({len(_lance_table)} chunks)")
+    print("[2/4] Connecting to Cosmos DB vector store...")
+    _vector_container = get_vector_container()
+    stats = get_collection_stats(_vector_container)
+    print(f"  OK ({stats['total_chunks']} chunks)")
 
     print("[3/4] Azure OpenAI clients...")
     _llm_client = get_llm_client()
@@ -200,7 +198,7 @@ def init_resources():
     assert os.path.exists(_db_path), f"DB not found: {_db_path}"
     print("  OK")
 
-    _tools = build_tools(_gremlin, _lance_table, _embedding_client, _db_path)
+    _tools = build_tools(_gremlin, _vector_container, _embedding_client, _db_path)
     print(f"\nReady — tools: {', '.join(_tools.keys())}")
 
 
