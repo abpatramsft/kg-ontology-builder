@@ -1,0 +1,702 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>KG Visualizer — IndiGo Airlines</title>
+<script src="https://unpkg.com/vis-network@9.1.9/standalone/umd/vis-network.min.js"></script>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:        #0f1117;
+  --surface:   #161922;
+  --surface2:  #1e2130;
+  --surface3:  #252840;
+  --border:    #2d3148;
+  --border-lt: #3a3f5c;
+  --text:      #e1e4ed;
+  --text-dim:  #8b90a5;
+  --text-mute: #5c617a;
+  --accent:    #6c8cff;
+  --accent-bg: rgba(108,140,255,.07);
+  --green:     #4ade80;
+  --green-bg:  rgba(74,222,128,.07);
+  --amber:     #fbbf24;
+  --amber-bg:  rgba(251,191,36,.07);
+  --purple:    #c084fc;
+  --red:       #f87171;
+  --red-bg:    rgba(248,113,113,.07);
+  --radius:    10px;
+  --radius-sm: 6px;
+  --font:      'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --mono:      'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
+}
+
+html, body {
+  height: 100%;
+  overflow: hidden;
+  font-family: var(--font);
+  background: var(--bg);
+  color: var(--text);
+}
+
+/* ── App shell ── */
+.viz-app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+/* ── Header ── */
+.viz-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 20px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.viz-header h1 {
+  font-size: 1rem;
+  font-weight: 700;
+  letter-spacing: -.01em;
+}
+.viz-header h1 span { color: var(--accent); }
+
+.nav-links {
+  display: flex;
+  gap: 16px;
+}
+.nav-links a {
+  font-size: .8rem;
+  color: var(--text-dim);
+  text-decoration: none;
+  transition: color .15s;
+}
+.nav-links a:hover { color: var(--text); }
+.nav-links a.active { color: var(--accent); font-weight: 600; }
+
+/* ── Toolbar ── */
+.toolbar {
+  padding: 10px 16px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.preset-btn {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 4px 12px;
+  color: var(--text-dim);
+  font-size: .74rem;
+  font-family: var(--mono);
+  cursor: pointer;
+  transition: all .15s;
+  white-space: nowrap;
+}
+.preset-btn:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-bg);
+}
+.preset-btn.active {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-bg);
+}
+
+.preset-group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.preset-group-label {
+  font-size: .68rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--text-mute);
+  white-space: nowrap;
+  padding-right: 2px;
+}
+.preset-sep {
+  width: 1px;
+  height: 16px;
+  background: var(--border);
+  flex-shrink: 0;
+  margin: 0 2px;
+}
+
+.query-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+#queryInput {
+  flex: 1;
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 8px 12px;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: .84rem;
+  outline: none;
+  transition: border-color .15s;
+}
+#queryInput:focus { border-color: var(--accent); }
+
+#runBtn {
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: var(--radius-sm);
+  padding: 8px 18px;
+  font-size: .84rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: opacity .15s;
+  white-space: nowrap;
+}
+#runBtn:hover { opacity: .88; }
+#runBtn:disabled { opacity: .45; cursor: not-allowed; }
+
+#statsLabel {
+  font-size: .76rem;
+  color: var(--text-dim);
+  font-family: var(--mono);
+  white-space: nowrap;
+  min-width: 140px;
+}
+
+/* ── Main area ── */
+.main {
+  display: flex;
+  flex: 1;
+  overflow: hidden;
+}
+
+/* ── Graph canvas ── */
+.graph-canvas {
+  flex: 1;
+  position: relative;
+  background: var(--bg);
+}
+
+#network {
+  width: 100%;
+  height: 100%;
+}
+
+/* ── Loading overlay ── */
+#loading-overlay {
+  display: none;
+  position: absolute;
+  inset: 0;
+  background: rgba(15, 17, 23, .65);
+  align-items: center;
+  justify-content: center;
+  z-index: 10;
+}
+#loading-overlay.visible { display: flex; }
+
+.spinner {
+  width: 36px;
+  height: 36px;
+  border: 3px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin .7s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ── Error banner ── */
+#error-banner {
+  display: none;
+  position: absolute;
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--red-bg);
+  border: 1px solid var(--red);
+  color: var(--red);
+  border-radius: var(--radius);
+  padding: 10px 18px;
+  font-size: .82rem;
+  max-width: 620px;
+  width: 90%;
+  text-align: center;
+  z-index: 20;
+}
+#error-banner.visible { display: block; }
+
+/* ── Side panel ── */
+.side-panel {
+  width: 300px;
+  background: var(--surface);
+  border-left: 1px solid var(--border);
+  overflow-y: auto;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.side-header {
+  padding: 12px 16px;
+  font-size: .72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--text-mute);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+#propContent {
+  padding: 14px 16px;
+  font-size: .82rem;
+  flex: 1;
+}
+
+.prop-row {
+  display: flex;
+  gap: 8px;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--border);
+}
+.prop-row:last-child { border-bottom: none; }
+
+.prop-key {
+  color: var(--text-dim);
+  font-family: var(--mono);
+  font-size: .74rem;
+  flex-shrink: 0;
+  min-width: 88px;
+  padding-top: 1px;
+}
+
+.prop-val {
+  color: var(--text);
+  word-break: break-word;
+  font-size: .8rem;
+  line-height: 1.5;
+}
+
+.empty-state {
+  color: var(--text-mute);
+  font-style: italic;
+  font-size: .82rem;
+  margin-top: 4px;
+}
+
+.node-badge {
+  display: inline-block;
+  padding: 2px 10px;
+  border-radius: 12px;
+  font-size: .7rem;
+  font-weight: 700;
+  margin-bottom: 12px;
+}
+.badge-DomainEntity { background: rgba(108,140,255,.15); color: var(--accent); }
+.badge-Subject      { background: rgba(74,222,128,.15);  color: var(--green); }
+.badge-Document     { background: rgba(251,191,36,.15);  color: var(--amber); }
+.badge-unknown      { background: var(--surface2); color: var(--text-dim); }
+
+/* ── Legend ── */
+.legend {
+  padding: 12px 16px;
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.legend-title {
+  font-size: .7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--text-mute);
+  margin-bottom: 8px;
+}
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 5px;
+  font-size: .76rem;
+  color: var(--text-dim);
+}
+.legend-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 2px solid;
+  flex-shrink: 0;
+}
+.dot-DomainEntity { background: #1e2d5f; border-color: #6c8cff; }
+.dot-Subject      { background: #1a3d28; border-color: #4ade80; }
+.dot-Document     { background: #3d2e0f; border-color: #fbbf24; }
+</style>
+</head>
+<body>
+<div class="viz-app">
+
+  <!-- Header -->
+  <div class="viz-header">
+    <h1>KG <span>Visualizer</span></h1>
+    <nav class="nav-links">
+      <a href="/">Agent</a>
+      <a href="/visualize" class="active">Graph</a>
+    </nav>
+  </div>
+
+  <!-- Toolbar -->
+  <div class="toolbar">
+    <div class="presets" id="presets"></div>
+    <div class="query-row">
+      <input id="queryInput" type="text" placeholder="e.g. g.V().hasLabel('DomainEntity')" spellcheck="false" />
+      <button id="runBtn" onclick="runQuery()">Run</button>
+      <span id="statsLabel">—</span>
+    </div>
+    <div style="font-size:.72rem;color:var(--text-mute);font-family:var(--mono);">
+      Queries must return <strong style="color:var(--accent)">g.V()</strong> or <strong style="color:var(--green)">g.E()</strong> objects — not <code>.values()</code>, <code>.valueMap()</code>, or <code>.count()</code>
+    </div>
+  </div>
+
+  <!-- Main -->
+  <div class="main">
+
+    <!-- Graph canvas -->
+    <div class="graph-canvas">
+      <div id="network"></div>
+
+      <div id="loading-overlay">
+        <div class="spinner"></div>
+      </div>
+
+      <div id="error-banner"></div>
+    </div>
+
+    <!-- Side panel -->
+    <div class="side-panel">
+      <div class="side-header">Node Properties</div>
+      <div id="propContent">
+        <div class="empty-state">Click a node to inspect its properties.</div>
+      </div>
+
+      <div class="legend">
+        <div class="legend-title">Legend</div>
+        <div class="legend-item"><span class="legend-dot dot-DomainEntity"></span>DomainEntity</div>
+        <div class="legend-item"><span class="legend-dot dot-Subject"></span>Subject</div>
+        <div class="legend-item"><span class="legend-dot dot-Document"></span>Document</div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+// ── Preset queries (grouped by graph layer) ────────────────────────────────
+const PRESET_GROUPS = [
+  {
+    label: "All",
+    items: [
+      { label: "Full graph (50)",       query: "g.V().limit(50)" },
+      { label: "All edges (50)",        query: "g.E().limit(50)" },
+    ],
+  },
+  {
+    label: "Domain graph",
+    items: [
+      // DomainEntity vertices represent structured DB tables/entities
+      { label: "Domain entities",       query: "g.V().hasLabel('DomainEntity')" },
+      { label: "RELATES_TO",            query: "g.E().hasLabel('RELATES_TO').limit(50)" },
+    ],
+  },
+  {
+    label: "Lexical graph",
+    items: [
+      // Subject vertices from unstructured documents; Document vertices are source docs
+      { label: "Subjects (25)",         query: "g.V().hasLabel('Subject').limit(25)" },
+      { label: "Documents",             query: "g.V().hasLabel('Document')" },
+      { label: "Subjects + Docs (40)",  query: "g.V().hasLabel('Subject', 'Document').limit(40)" },
+      { label: "HAS_SUBJECT",           query: "g.E().hasLabel('HAS_SUBJECT').limit(50)" },
+    ],
+  },
+  {
+    label: "Bridge layer",
+    items: [
+      // CORRESPONDS_TO edges link unstructured Subjects to structured DomainEntities
+      { label: "CORRESPONDS_TO (30)",   query: "g.E().hasLabel('CORRESPONDS_TO').limit(30)" },
+    ],
+  },
+];
+
+// Build grouped preset buttons
+const presetsEl = document.getElementById("presets");
+PRESET_GROUPS.forEach((group, gi) => {
+  if (gi > 0) {
+    const sep = document.createElement("span");
+    sep.className = "preset-sep";
+    presetsEl.appendChild(sep);
+  }
+
+  const groupEl = document.createElement("div");
+  groupEl.className = "preset-group";
+
+  const labelEl = document.createElement("span");
+  labelEl.className = "preset-group-label";
+  labelEl.textContent = group.label;
+  groupEl.appendChild(labelEl);
+
+  group.items.forEach(p => {
+    const btn = document.createElement("button");
+    btn.className = "preset-btn";
+    btn.textContent = p.label;
+    btn.title = p.query;  // tooltip shows the full Gremlin query
+    btn.addEventListener("click", () => {
+      document.querySelectorAll(".preset-btn").forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+      document.getElementById("queryInput").value = p.query;
+      runQuery();
+    });
+    groupEl.appendChild(btn);
+  });
+
+  presetsEl.appendChild(groupEl);
+});
+
+// ── Vis.js setup ───────────────────────────────────────────────────────────
+const nodesDataset = new vis.DataSet([]);
+const edgesDataset = new vis.DataSet([]);
+
+const VIS_OPTIONS = {
+  nodes: {
+    shape: "dot",
+    size: 16,
+    font: {
+      size: 11,
+      color: "#e1e4ed",
+      multi: true,
+      face: "Inter, sans-serif",
+    },
+    borderWidth: 2,
+    shadow: { enabled: true, color: "rgba(0,0,0,0.4)", size: 6, x: 2, y: 2 },
+  },
+  edges: {
+    font: { size: 9, color: "#5c617a", align: "middle" },
+    color: { color: "#2d3148", highlight: "#6c8cff", hover: "#6c8cff" },
+    smooth: { type: "continuous" },
+    arrows: { to: { enabled: true, scaleFactor: 0.55 } },
+    width: 1.5,
+    selectionWidth: 2.5,
+  },
+  groups: {
+    DomainEntity: {
+      color: {
+        background: "#1e2d5f",
+        border: "#6c8cff",
+        highlight: { background: "#2a3d7a", border: "#8faeff" },
+        hover: { background: "#253376", border: "#8faeff" },
+      },
+    },
+    Subject: {
+      color: {
+        background: "#1a3d28",
+        border: "#4ade80",
+        highlight: { background: "#22522f", border: "#6ef09a" },
+        hover: { background: "#1f4a2d", border: "#6ef09a" },
+      },
+    },
+    Document: {
+      color: {
+        background: "#3d2e0f",
+        border: "#fbbf24",
+        highlight: { background: "#4f3c15", border: "#fdd272" },
+        hover: { background: "#473512", border: "#fdd272" },
+      },
+    },
+    unknown: {
+      color: {
+        background: "#1e2130",
+        border: "#3a3f5c",
+        highlight: { background: "#252840", border: "#5c617a" },
+        hover: { background: "#22243a", border: "#5c617a" },
+      },
+    },
+  },
+  physics: {
+    enabled: true,
+    solver: "forceAtlas2Based",
+    forceAtlas2Based: {
+      gravitationalConstant: -50,
+      centralGravity: 0.01,
+      springLength: 110,
+      springConstant: 0.08,
+      damping: 0.4,
+    },
+    stabilization: { iterations: 180, updateInterval: 30 },
+  },
+  interaction: {
+    hover: true,
+    tooltipDelay: 200,
+    navigationButtons: true,
+    keyboard: { enabled: true, bindToWindow: false },
+    zoomView: true,
+  },
+};
+
+const container = document.getElementById("network");
+const network = new vis.Network(
+  container,
+  { nodes: nodesDataset, edges: edgesDataset },
+  VIS_OPTIONS
+);
+
+// Hide loading once physics stabilises
+network.on("stabilizationIterationsDone", () => {
+  hideLoading();
+  network.fit({ animation: { duration: 600, easingFunction: "easeInOutQuad" } });
+});
+
+// Node click → side panel
+network.on("click", params => {
+  if (params.nodes.length > 0) {
+    const nodeId = params.nodes[0];
+    const node = nodesDataset.get(nodeId);
+    showNodeProperties(node);
+  } else {
+    clearSidePanel();
+  }
+});
+
+// ── Query execution ────────────────────────────────────────────────────────
+async function runQuery() {
+  const query = document.getElementById("queryInput").value.trim();
+  if (!query) return;
+
+  const btn = document.getElementById("runBtn");
+  btn.disabled = true;
+  showLoading();
+  hideError();
+  clearSidePanel();
+  document.getElementById("statsLabel").textContent = "Running…";
+
+  try {
+    const resp = await fetch("/api/graph", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query }),
+    });
+    const data = await resp.json();
+
+    if (data.error) {
+      showError(data.error);
+      hideLoading();
+      document.getElementById("statsLabel").textContent = "Error";
+      return;
+    }
+
+    // Load graph data
+    nodesDataset.clear();
+    edgesDataset.clear();
+    nodesDataset.add(data.nodes);
+    edgesDataset.add(data.edges);
+
+    // Stats
+    let stats = `${data.stats.node_count} nodes · ${data.stats.edge_count} edges`;
+    if (data.warning) stats += ` — ${data.warning}`;
+    document.getElementById("statsLabel").textContent = stats;
+
+    // If no physics needed (no nodes), hide loading immediately
+    if (data.nodes.length === 0) {
+      hideLoading();
+      network.fit();
+    }
+
+  } catch (err) {
+    showError("Network error: " + err.message);
+    hideLoading();
+    document.getElementById("statsLabel").textContent = "Error";
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+// Allow Enter key in query input
+document.getElementById("queryInput").addEventListener("keydown", e => {
+  if (e.key === "Enter") runQuery();
+});
+
+// ── Side panel helpers ─────────────────────────────────────────────────────
+function showNodeProperties(node) {
+  const panel = document.getElementById("propContent");
+  if (!node) { clearSidePanel(); return; }
+
+  const label = node.group || "unknown";
+  const badgeClass = ["DomainEntity", "Subject", "Document"].includes(label)
+    ? "badge-" + label
+    : "badge-unknown";
+
+  let html = `<span class="node-badge ${badgeClass}">${escapeHtml(label)}</span>`;
+  html += buildPropRow("id", node.id);
+
+  const props = node.rawProps || {};
+  for (const [k, v] of Object.entries(props)) {
+    html += buildPropRow(k, v);
+  }
+
+  panel.innerHTML = html;
+}
+
+function buildPropRow(key, val) {
+  return `<div class="prop-row">
+    <span class="prop-key">${escapeHtml(String(key))}</span>
+    <span class="prop-val">${escapeHtml(String(val))}</span>
+  </div>`;
+}
+
+function clearSidePanel() {
+  document.getElementById("propContent").innerHTML =
+    '<div class="empty-state">Click a node to inspect its properties.</div>';
+}
+
+// ── UI state helpers ───────────────────────────────────────────────────────
+function showLoading() {
+  document.getElementById("loading-overlay").classList.add("visible");
+}
+function hideLoading() {
+  document.getElementById("loading-overlay").classList.remove("visible");
+}
+function showError(msg) {
+  const el = document.getElementById("error-banner");
+  el.textContent = msg;
+  el.classList.add("visible");
+}
+function hideError() {
+  document.getElementById("error-banner").classList.remove("visible");
+}
+function escapeHtml(str) {
+  return String(str)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+</script>
+</body>
+</html>

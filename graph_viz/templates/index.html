@@ -1,0 +1,740 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Gremlin Graph Visualizer</title>
+<script src="https://unpkg.com/vis-network@9.1.9/standalone/umd/vis-network.min.js"></script>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#0f1117;--surface:#161922;--surface2:#1e2130;--surface3:#252840;
+  --border:#2d3148;--border-lt:#3a3f5c;
+  --text:#e1e4ed;--dim:#8b90a5;--mute:#5c617a;
+  --accent:#6c8cff;--accent-bg:rgba(108,140,255,.08);
+  --green:#4ade80;--amber:#fbbf24;--red:#f87171;--red-bg:rgba(248,113,113,.08);
+  --cyan:#22d3ee;
+  --radius:8px;--radius-sm:5px;
+  --font:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+  --mono:'JetBrains Mono','Fira Code',monospace;
+}
+html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);font-family:var(--font)}
+
+/* ── Shell ── */
+.shell{display:flex;flex-direction:column;height:100vh}
+
+/* ── Header ── */
+.hdr{display:flex;align-items:center;gap:12px;padding:8px 16px;background:var(--surface);border-bottom:1px solid var(--border);flex-shrink:0}
+.hdr-title{font-size:.95rem;font-weight:700;letter-spacing:-.01em}
+.hdr-title span{color:var(--accent)}
+.hdr-crumb{font-size:.75rem;color:var(--dim);font-family:var(--mono);background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:2px 8px;white-space:nowrap}
+.hdr-spacer{flex:1}
+.status-dot{width:8px;height:8px;border-radius:50%;background:#3a3f5c;flex-shrink:0;transition:background .3s}
+.status-dot.ok{background:var(--green)}
+.status-dot.err{background:var(--red)}
+.icon-btn{background:none;border:1px solid var(--border);border-radius:var(--radius-sm);padding:5px 10px;color:var(--dim);font-size:.75rem;cursor:pointer;transition:all .15s}
+.icon-btn:hover{color:var(--text);border-color:var(--border-lt)}
+
+/* ── Toolbar ── */
+.toolbar{padding:8px 12px;background:var(--surface);border-bottom:1px solid var(--border);flex-shrink:0;display:flex;flex-direction:column;gap:7px}
+.preset-row{display:flex;flex-wrap:wrap;gap:5px;align-items:center}
+.preset-group{display:flex;align-items:center;gap:4px;flex-wrap:wrap}
+.preset-grp-label{font-size:.66rem;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--mute);white-space:nowrap;padding:0 3px}
+.preset-sep{width:1px;height:14px;background:var(--border);margin:0 3px;flex-shrink:0}
+.preset-btn{background:var(--surface2);border:1px solid var(--border);border-radius:20px;padding:3px 10px;color:var(--dim);font-size:.72rem;font-family:var(--mono);cursor:pointer;transition:all .12s;white-space:nowrap}
+.preset-btn:hover{color:var(--accent);border-color:var(--accent);background:var(--accent-bg)}
+.preset-btn.active{color:var(--accent);border-color:var(--accent);background:var(--accent-bg)}
+.preset-loading{font-size:.72rem;color:var(--mute);font-style:italic}
+.query-row{display:flex;gap:8px;align-items:center}
+#qInput{flex:1;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:7px 11px;color:var(--text);font-family:var(--mono);font-size:.83rem;outline:none;transition:border-color .15s}
+#qInput:focus{border-color:var(--accent)}
+.run-btn{background:var(--accent);color:#fff;border:none;border-radius:var(--radius-sm);padding:7px 18px;font-size:.83rem;font-weight:600;cursor:pointer;transition:opacity .15s;white-space:nowrap}
+.run-btn:hover{opacity:.88}
+.run-btn:disabled{opacity:.4;cursor:not-allowed}
+#stats-label{font-size:.74rem;color:var(--dim);font-family:var(--mono);white-space:nowrap;min-width:130px}
+
+/* ── Main ── */
+.main{display:flex;flex:1;overflow:hidden}
+
+/* ── Schema sidebar ── */
+.schema-sidebar{width:220px;background:var(--surface);border-right:1px solid var(--border);display:flex;flex-direction:column;flex-shrink:0;overflow:hidden;transition:width .2s}
+.schema-sidebar.collapsed{width:0;border-right:none}
+.schema-inner{overflow-y:auto;flex:1;min-width:220px}
+.schema-section{padding:8px 0}
+.schema-section-hdr{padding:6px 14px;font-size:.66rem;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--mute);display:flex;align-items:center;justify-content:space-between}
+.schema-section-hdr span{color:var(--dim);font-size:.7rem;font-weight:400;text-transform:none;letter-spacing:0}
+.schema-item{display:flex;align-items:center;gap:8px;padding:5px 14px;cursor:pointer;transition:background .1s;user-select:none}
+.schema-item:hover{background:var(--surface2)}
+.schema-dot{width:10px;height:10px;border-radius:50%;border:2px solid;flex-shrink:0}
+.schema-edge-arrow{color:var(--dim);font-size:.75rem;flex-shrink:0;width:10px;text-align:center}
+.schema-lbl{flex:1;font-size:.78rem;color:var(--text);font-family:var(--mono);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.schema-count{font-size:.68rem;color:var(--mute);font-family:var(--mono)}
+.schema-empty{padding:12px 14px;font-size:.75rem;color:var(--mute);font-style:italic}
+.schema-divider{margin:0 14px;height:1px;background:var(--border)}
+
+/* ── Graph canvas ── */
+.canvas-wrap{flex:1;position:relative;background:var(--bg);min-width:0}
+#network{width:100%;height:100%}
+
+/* ── Loading ── */
+#loading{display:none;position:absolute;inset:0;background:rgba(15,17,23,.7);align-items:center;justify-content:center;z-index:20;flex-direction:column;gap:10px}
+#loading.on{display:flex}
+.spinner{width:32px;height:32px;border:3px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin .7s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.loading-txt{font-size:.78rem;color:var(--dim)}
+
+/* ── Error / warning banner ── */
+#banner{display:none;position:absolute;top:12px;left:50%;transform:translateX(-50%);z-index:30;max-width:640px;width:92%;border-radius:var(--radius);padding:10px 16px;font-size:.8rem;text-align:center}
+#banner.err{display:block;background:var(--red-bg);border:1px solid var(--red);color:var(--red)}
+#banner.warn{display:block;background:rgba(251,191,36,.08);border:1px solid var(--amber);color:var(--amber)}
+
+/* ── Table view ── */
+#table-wrap{display:none;position:absolute;inset:0;background:var(--bg);overflow:auto;padding:16px}
+#table-wrap.on{display:block}
+.tbl{width:100%;border-collapse:collapse;font-size:.78rem}
+.tbl th{background:var(--surface2);color:var(--dim);font-weight:600;padding:7px 12px;text-align:left;border-bottom:1px solid var(--border);font-family:var(--mono);white-space:nowrap;position:sticky;top:0}
+.tbl td{padding:6px 12px;border-bottom:1px solid var(--border);color:var(--text);font-family:var(--mono);word-break:break-word;vertical-align:top;max-width:400px}
+.tbl tr:hover td{background:var(--surface2)}
+
+/* ── Inspector (right panel) ── */
+.inspector{width:260px;background:var(--surface);border-left:1px solid var(--border);flex-shrink:0;display:flex;flex-direction:column;overflow:hidden}
+.inspector-hdr{padding:10px 14px;font-size:.66rem;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--mute);border-bottom:1px solid var(--border);flex-shrink:0}
+.inspector-body{flex:1;overflow-y:auto;padding:12px 14px}
+.prop-row{display:flex;gap:8px;padding:4px 0;border-bottom:1px solid var(--border)}
+.prop-row:last-child{border-bottom:none}
+.prop-k{color:var(--dim);font-family:var(--mono);font-size:.72rem;flex-shrink:0;min-width:80px;padding-top:1px}
+.prop-v{color:var(--text);font-size:.78rem;word-break:break-word;line-height:1.5}
+.node-badge{display:inline-block;padding:2px 9px;border-radius:12px;font-size:.68rem;font-weight:700;margin-bottom:10px;border:1px solid}
+.inspector-empty{color:var(--mute);font-style:italic;font-size:.78rem}
+
+/* ── Legend ── */
+.legend{border-top:1px solid var(--border);padding:10px 14px;flex-shrink:0}
+.legend-title{font-size:.66rem;font-weight:700;text-transform:uppercase;letter-spacing:.07em;color:var(--mute);margin-bottom:7px}
+#legend-items{display:flex;flex-direction:column;gap:4px;max-height:130px;overflow-y:auto}
+.legend-row{display:flex;align-items:center;gap:7px;font-size:.74rem;color:var(--dim)}
+.legend-dot{width:9px;height:9px;border-radius:50%;border:2px solid;flex-shrink:0}
+
+/* ── Controls bar ── */
+.controls{padding:6px 14px;background:var(--surface);border-top:1px solid var(--border);display:flex;gap:8px;align-items:center;flex-shrink:0}
+.ctrl-btn{background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:4px 10px;color:var(--dim);font-size:.73rem;cursor:pointer;transition:all .12s}
+.ctrl-btn:hover{color:var(--text);border-color:var(--border-lt)}
+.ctrl-btn.on{color:var(--accent);border-color:var(--accent);background:var(--accent-bg)}
+.ctrl-sep{width:1px;height:16px;background:var(--border);margin:0 2px}
+.ctrl-spacer{flex:1}
+
+/* ── Connection modal ── */
+.modal-bg{display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:100;align-items:center;justify-content:center}
+.modal-bg.on{display:flex}
+.modal{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:22px 24px;width:440px;max-width:92vw}
+.modal h3{font-size:.95rem;font-weight:700;margin-bottom:16px;color:var(--text)}
+.form-row{margin-bottom:12px}
+.form-row label{display:block;font-size:.73rem;color:var(--dim);margin-bottom:4px}
+.form-row input{width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius-sm);padding:7px 10px;color:var(--text);font-family:var(--mono);font-size:.82rem;outline:none}
+.form-row input:focus{border-color:var(--accent)}
+.modal-actions{display:flex;gap:8px;margin-top:18px;justify-content:flex-end}
+.modal-actions .run-btn{padding:7px 16px}
+.modal-actions .icon-btn{padding:6px 14px;font-size:.8rem}
+#connect-msg{font-size:.76rem;margin-top:8px;min-height:18px}
+#connect-msg.ok{color:var(--green)}
+#connect-msg.err{color:var(--red)}
+</style>
+</head>
+<body>
+<div class="shell">
+
+  <!-- Header -->
+  <div class="hdr">
+    <span class="hdr-title">Gremlin <span>Visualizer</span></span>
+    <span id="status-dot" class="status-dot {% if connected %}ok{% endif %}"></span>
+    <span id="hdr-crumb" class="hdr-crumb">
+      {%- if connected %}{{ database }} / {{ graph_name }}{%- else %}not connected{%- endif %}
+    </span>
+    <div class="hdr-spacer"></div>
+    <button class="icon-btn" onclick="openSettings()">⚙ Connection</button>
+    <button class="icon-btn" onclick="toggleSchema()">◧ Schema</button>
+  </div>
+
+  <!-- Toolbar -->
+  <div class="toolbar">
+    <div class="preset-row" id="preset-row">
+      <span class="preset-loading" id="preset-loading">Loading schema…</span>
+    </div>
+    <div class="query-row">
+      <input id="qInput" type="text" placeholder="g.V().limit(50)" spellcheck="false" />
+      <button class="run-btn" id="run-btn" onclick="runQuery()">Run</button>
+      <span id="stats-label">—</span>
+    </div>
+  </div>
+
+  <!-- Main -->
+  <div class="main">
+
+    <!-- Schema sidebar -->
+    <div class="schema-sidebar" id="schema-sidebar">
+      <div class="schema-inner" id="schema-inner">
+        <div class="schema-section">
+          <div class="schema-section-hdr">Vertex Labels</div>
+          <div id="schema-v"></div>
+        </div>
+        <div class="schema-divider"></div>
+        <div class="schema-section">
+          <div class="schema-section-hdr">Edge Types</div>
+          <div id="schema-e"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Graph canvas -->
+    <div class="canvas-wrap" id="canvas-wrap">
+      <div id="network"></div>
+
+      <div id="loading">
+        <div class="spinner"></div>
+        <span class="loading-txt" id="loading-txt">Running query…</span>
+      </div>
+
+      <div id="banner"></div>
+
+      <!-- Table (shown for valueMap / scalar results) -->
+      <div id="table-wrap">
+        <table class="tbl" id="result-table">
+          <thead id="tbl-head"></thead>
+          <tbody id="tbl-body"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Inspector -->
+    <div class="inspector">
+      <div class="inspector-hdr">Node Properties</div>
+      <div class="inspector-body" id="inspector-body">
+        <div class="inspector-empty">Click a node to inspect.</div>
+      </div>
+      <div class="legend">
+        <div class="legend-title">Legend</div>
+        <div id="legend-items"></div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Controls bar -->
+  <div class="controls">
+    <button class="ctrl-btn on" id="btn-physics" onclick="togglePhysics()">Physics ON</button>
+    <button class="ctrl-btn" id="btn-elabels" onclick="toggleEdgeLabels()">Edge Labels</button>
+    <button class="ctrl-btn" onclick="fitView()">Fit View</button>
+    <button class="ctrl-btn" onclick="clearGraph()">Clear</button>
+    <span class="ctrl-sep"></span>
+    <span class="ctrl-spacer"></span>
+    <span style="font-size:.72rem;color:var(--mute)">Scroll to zoom · Drag to pan · Click node to inspect</span>
+  </div>
+
+</div>
+
+<!-- Connection modal -->
+<div class="modal-bg" id="modal-bg" onclick="if(event.target===this)closeSettings()">
+  <div class="modal">
+    <h3>Connection Settings</h3>
+    <div class="form-row">
+      <label>Endpoint hostname (no wss:// prefix)</label>
+      <input id="cfg-ep" type="text" placeholder="cosmosdb-xyz.gremlin.cosmos.azure.com" value="{{ endpoint }}" />
+    </div>
+    <div class="form-row">
+      <label>Primary Key / Password</label>
+      <input id="cfg-key" type="password" placeholder="••••••••" />
+    </div>
+    <div class="form-row">
+      <label>Database</label>
+      <input id="cfg-db" type="text" placeholder="mydb" value="{{ database }}" />
+    </div>
+    <div class="form-row">
+      <label>Graph / Container</label>
+      <input id="cfg-gr" type="text" placeholder="mygraph" value="{{ graph_name }}" />
+    </div>
+    <div id="connect-msg"></div>
+    <div class="modal-actions">
+      <button class="icon-btn" onclick="closeSettings()">Cancel</button>
+      <button class="run-btn" onclick="saveConnection()">Connect</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── Color palette (auto-assigned per label) ────────────────────────────────
+const PALETTE = [
+  {background:"#1e2d5f",border:"#6c8cff",highlight:{background:"#2a3d7a",border:"#8faeff"},hover:{background:"#253376",border:"#8faeff"}},
+  {background:"#1a3d28",border:"#4ade80",highlight:{background:"#22522f",border:"#6ef09a"},hover:{background:"#1f4a2d",border:"#6ef09a"}},
+  {background:"#3d2e0f",border:"#fbbf24",highlight:{background:"#4f3c15",border:"#fdd272"},hover:{background:"#473512",border:"#fdd272"}},
+  {background:"#3d1f3f",border:"#c084fc",highlight:{background:"#4f2a52",border:"#d8a4ff"},hover:{background:"#472347",border:"#d8a4ff"}},
+  {background:"#3d1a1a",border:"#f87171",highlight:{background:"#522222",border:"#ff9e9e"},hover:{background:"#4a1e1e",border:"#ff9e9e"}},
+  {background:"#0f3d3d",border:"#22d3ee",highlight:{background:"#154f4f",border:"#5ee9ff"},hover:{background:"#124545",border:"#5ee9ff"}},
+  {background:"#2d2d0f",border:"#a3e635",highlight:{background:"#3a3a14",border:"#c6f55c"},hover:{background:"#343412",border:"#c6f55c"}},
+  {background:"#2d1a0f",border:"#fb923c",highlight:{background:"#3a2214",border:"#ffb472"},hover:{background:"#351e12",border:"#ffb472"}},
+];
+const colorMap = {};   // label → color object
+let paletteIdx = 0;
+
+function getColor(label) {
+  if (!colorMap[label]) {
+    colorMap[label] = PALETTE[paletteIdx % PALETTE.length];
+    paletteIdx++;
+    network && network.setOptions({ groups: buildGroups() });
+    updateLegend();
+  }
+  return colorMap[label];
+}
+
+function buildGroups() {
+  const g = { unknown: { color: { background:"#1e2130",border:"#3a3f5c",highlight:{background:"#252840",border:"#5c617a"},hover:{background:"#22243a",border:"#5c617a"} } } };
+  for (const [lbl, c] of Object.entries(colorMap)) g[lbl] = { color: c };
+  return g;
+}
+
+// ── Vis.js setup ───────────────────────────────────────────────────────────
+const nodesDS = new vis.DataSet([]);
+const edgesDS = new vis.DataSet([]);
+let   network = null;
+let   physicsOn = true;
+let   edgeLabelsOn = false;
+
+function initNetwork() {
+  const opts = {
+    nodes: {
+      shape: "dot", size: 16,
+      font: { size: 11, color: "#e1e4ed", multi: true, face: "Inter, sans-serif" },
+      borderWidth: 2,
+      shadow: { enabled: true, color: "rgba(0,0,0,.45)", size: 6, x: 2, y: 2 },
+    },
+    edges: {
+      font: { size: 0, color: "#5c617a", align: "middle" },  // hidden by default
+      color: { color: "#2d3148", highlight: "#6c8cff", hover: "#6c8cff" },
+      smooth: { type: "continuous" },
+      arrows: { to: { enabled: true, scaleFactor: .55 } },
+      width: 1.5, selectionWidth: 2.5,
+    },
+    groups: buildGroups(),
+    physics: {
+      enabled: true,
+      solver: "forceAtlas2Based",
+      forceAtlas2Based: { gravitationalConstant: -55, centralGravity: .01, springLength: 110, springConstant: .08, damping: .4 },
+      stabilization: { iterations: 200, updateInterval: 30 },
+    },
+    interaction: {
+      hover: true, tooltipDelay: 180,
+      navigationButtons: false, keyboard: { enabled: true, bindToWindow: false },
+    },
+  };
+
+  network = new vis.Network(document.getElementById("network"),
+                            { nodes: nodesDS, edges: edgesDS }, opts);
+
+  network.on("stabilizationIterationsDone", () => {
+    // Fires only during initial load stabilization — re-fit after physics settles
+    network.fit({ animation: { duration: 500, easingFunction: "easeInOutQuad" } });
+  });
+
+  network.on("click", p => {
+    if (p.nodes.length > 0) showProps(nodesDS.get(p.nodes[0]));
+    else clearProps();
+  });
+}
+
+// ── Query execution ────────────────────────────────────────────────────────
+async function runQuery() {
+  const q = document.getElementById("qInput").value.trim();
+  if (!q) return;
+
+  document.getElementById("run-btn").disabled = true;
+  showLoading("Running query…");
+  hideBanner();
+  clearProps();
+  hideTable();
+  document.getElementById("stats-label").textContent = "Running…";
+
+  try {
+    const resp = await fetch("/api/graph", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ query: q }),
+    });
+    const data = await resp.json();
+
+    if (data.error) { showErr(data.error); hideLoading(); updateStats(0, 0); return; }
+
+    if (data.mode === "table" || data.table) {
+      hideLoading();
+      showTable(data.table || []);
+      showWarn(data.warning || "Showing tabular results.");
+      updateStats(0, 0, data.table ? data.table.length : 0);
+      return;
+    }
+
+    // Ensure all labels have colors
+    for (const n of (data.nodes || [])) getColor(n.group || "unknown");
+
+    // Deduplicate by ID before adding — CosmosDB can return the same
+    // element from multiple traversal paths / batch queries
+    const seenN = new Set(), seenE = new Set();
+    const uniqNodes = (data.nodes || [])
+      .filter(n => { if (seenN.has(n.id)) return false; seenN.add(n.id); return true; })
+      .map(n => ({ ...n, title: makeTip(n.title) }));  // string → DOM element
+    const uniqEdges = (data.edges || [])
+      .filter(e => { if (seenE.has(e.id)) return false; seenE.add(e.id); return true; })
+      .map(e => ({ ...e, title: makeTip(e.title) }));  // string → DOM element
+
+    nodesDS.clear();
+    edgesDS.clear();
+    nodesDS.add(uniqNodes);
+    edgesDS.add(uniqEdges);
+
+    updateStats(data.stats.node_count, data.stats.edge_count);
+    if (data.warning) showWarn(data.warning);
+
+    // Hide loading immediately — graph renders live while physics runs.
+    // stabilizationIterationsDone only fires during the initial load phase,
+    // not when data is added to a running simulation, so don't rely on it.
+    hideLoading();
+    if (uniqNodes.length > 0) {
+      network.fit({ animation: { duration: 600, easingFunction: "easeInOutQuad" } });
+    }
+
+  } catch (err) {
+    showErr("Network error: " + err.message);
+    hideLoading();
+  } finally {
+    document.getElementById("run-btn").disabled = false;
+  }
+}
+
+function setQuery(q) {
+  document.getElementById("qInput").value = q;
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+  document.getElementById("qInput").addEventListener("keydown", e => {
+    if (e.key === "Enter") runQuery();
+  });
+});
+
+// ── Schema loading ─────────────────────────────────────────────────────────
+let schemaData = { vertex_labels: [], edge_labels: [] };
+
+async function loadSchema() {
+  try {
+    const resp = await fetch("/api/schema");
+    if (!resp.ok) return;
+    const data = await resp.json();
+    if (data.error) return;
+    schemaData = data;
+    renderSchema();
+    renderPresets();
+  } catch (e) {
+    console.warn("Schema load failed:", e);
+  } finally {
+    document.getElementById("preset-loading").style.display = "none";
+  }
+}
+
+function renderSchema() {
+  // Vertex labels
+  const vEl = document.getElementById("schema-v");
+  vEl.innerHTML = "";
+  if (!schemaData.vertex_labels.length) {
+    vEl.innerHTML = '<div class="schema-empty">None found</div>';
+  } else {
+    for (const lbl of schemaData.vertex_labels) {
+      const c = getColor(lbl);
+      const div = document.createElement("div");
+      div.className = "schema-item";
+      div.title = `g.V().hasLabel('${lbl}')`;
+      div.innerHTML = `
+        <span class="schema-dot" style="background:${c.background};border-color:${c.border}"></span>
+        <span class="schema-lbl">${esc(lbl)}</span>
+      `;
+      div.addEventListener("click", () => { setQuery(`g.V().hasLabel('${lbl}')`); runQuery(); });
+      vEl.appendChild(div);
+    }
+  }
+
+  // Edge types
+  const eEl = document.getElementById("schema-e");
+  eEl.innerHTML = "";
+  if (!schemaData.edge_labels.length) {
+    eEl.innerHTML = '<div class="schema-empty">None found</div>';
+  } else {
+    for (const lbl of schemaData.edge_labels) {
+      const div = document.createElement("div");
+      div.className = "schema-item";
+      div.title = `g.E().hasLabel('${lbl}').limit(50)`;
+      div.innerHTML = `
+        <span class="schema-edge-arrow">→</span>
+        <span class="schema-lbl">${esc(lbl)}</span>
+      `;
+      div.addEventListener("click", () => { setQuery(`g.E().hasLabel('${lbl}').limit(50)`); runQuery(); });
+      eEl.appendChild(div);
+    }
+  }
+}
+
+function renderPresets() {
+  const row = document.getElementById("preset-row");
+  row.innerHTML = "";
+
+  const groups = [
+    {
+      label: "Quick",
+      items: [
+        { label: "Full graph", query: "g.V()" },
+        { label: "All edges (50)", query: "g.E().limit(50)" },
+      ],
+    },
+  ];
+
+  if (schemaData.vertex_labels.length) {
+    groups.push({
+      label: "Vertices",
+      items: schemaData.vertex_labels.map(lbl => ({
+        label: lbl, query: `g.V().hasLabel('${lbl}').limit(50)`,
+      })),
+    });
+  }
+
+  if (schemaData.edge_labels.length) {
+    groups.push({
+      label: "Edges",
+      items: schemaData.edge_labels.map(lbl => ({
+        label: lbl, query: `g.E().hasLabel('${lbl}').limit(50)`,
+      })),
+    });
+  }
+
+  groups.forEach((grp, gi) => {
+    if (gi > 0) {
+      const sep = document.createElement("span");
+      sep.className = "preset-sep";
+      row.appendChild(sep);
+    }
+    const grpEl = document.createElement("div");
+    grpEl.className = "preset-group";
+    const lblEl = document.createElement("span");
+    lblEl.className = "preset-grp-label";
+    lblEl.textContent = grp.label;
+    grpEl.appendChild(lblEl);
+
+    grp.items.forEach(p => {
+      const btn = document.createElement("button");
+      btn.className = "preset-btn";
+      btn.textContent = p.label;
+      btn.title = p.query;
+      btn.addEventListener("click", () => {
+        document.querySelectorAll(".preset-btn").forEach(b => b.classList.remove("active"));
+        btn.classList.add("active");
+        setQuery(p.query);
+        runQuery();
+      });
+      grpEl.appendChild(btn);
+    });
+    row.appendChild(grpEl);
+  });
+}
+
+// ── Node inspector ─────────────────────────────────────────────────────────
+function showProps(node) {
+  if (!node) { clearProps(); return; }
+  const body = document.getElementById("inspector-body");
+  const props = node.rawProps || {};
+  const label = node.group || "unknown";
+  const c = colorMap[label] || { border: "#3a3f5c", background: "#1e2130" };
+
+  let html = `<span class="node-badge" style="color:${c.border};background:${c.background}20;border-color:${c.border}40">${esc(label)}</span>`;
+  for (const [k, v] of Object.entries(props)) {
+    html += `<div class="prop-row">
+      <span class="prop-k">${esc(String(k))}</span>
+      <span class="prop-v">${esc(String(v))}</span>
+    </div>`;
+  }
+  body.innerHTML = html;
+}
+
+function clearProps() {
+  document.getElementById("inspector-body").innerHTML =
+    '<div class="inspector-empty">Click a node to inspect.</div>';
+}
+
+// ── Legend ─────────────────────────────────────────────────────────────────
+function updateLegend() {
+  const el = document.getElementById("legend-items");
+  el.innerHTML = "";
+  for (const [lbl, c] of Object.entries(colorMap)) {
+    el.innerHTML += `<div class="legend-row">
+      <span class="legend-dot" style="background:${c.background};border-color:${c.border}"></span>
+      ${esc(lbl)}
+    </div>`;
+  }
+}
+
+// ── Table view ─────────────────────────────────────────────────────────────
+function showTable(rows) {
+  if (!rows.length) return;
+  const keys = Object.keys(rows[0]);
+  const head = document.getElementById("tbl-head");
+  const body = document.getElementById("tbl-body");
+  head.innerHTML = "<tr>" + keys.map(k => `<th>${esc(k)}</th>`).join("") + "</tr>";
+  body.innerHTML = rows.map(row =>
+    "<tr>" + keys.map(k => `<td>${esc(String(row[k] ?? ""))}</td>`).join("") + "</tr>"
+  ).join("");
+  document.getElementById("table-wrap").classList.add("on");
+}
+
+function hideTable() {
+  document.getElementById("table-wrap").classList.remove("on");
+}
+
+// ── Controls ───────────────────────────────────────────────────────────────
+function togglePhysics() {
+  physicsOn = !physicsOn;
+  network.setOptions({ physics: { enabled: physicsOn } });
+  const btn = document.getElementById("btn-physics");
+  btn.textContent = physicsOn ? "Physics ON" : "Physics OFF";
+  btn.classList.toggle("on", physicsOn);
+}
+
+function toggleEdgeLabels() {
+  edgeLabelsOn = !edgeLabelsOn;
+  network.setOptions({ edges: { font: { size: edgeLabelsOn ? 9 : 0 } } });
+  const btn = document.getElementById("btn-elabels");
+  btn.textContent = edgeLabelsOn ? "Edge Labels ON" : "Edge Labels";
+  btn.classList.toggle("on", edgeLabelsOn);
+}
+
+function fitView() {
+  network.fit({ animation: { duration: 500, easingFunction: "easeInOutQuad" } });
+}
+
+function clearGraph() {
+  nodesDS.clear();
+  edgesDS.clear();
+  hideTable();
+  hideBanner();
+  clearProps();
+  document.getElementById("stats-label").textContent = "—";
+  document.querySelectorAll(".preset-btn").forEach(b => b.classList.remove("active"));
+}
+
+// ── Schema sidebar toggle ──────────────────────────────────────────────────
+function toggleSchema() {
+  document.getElementById("schema-sidebar").classList.toggle("collapsed");
+}
+
+// ── Connection modal ───────────────────────────────────────────────────────
+function openSettings() {
+  document.getElementById("modal-bg").classList.add("on");
+  document.getElementById("connect-msg").textContent = "";
+  document.getElementById("connect-msg").className = "";
+}
+
+function closeSettings() {
+  document.getElementById("modal-bg").classList.remove("on");
+}
+
+async function saveConnection() {
+  const ep  = document.getElementById("cfg-ep").value.trim();
+  const key = document.getElementById("cfg-key").value.trim();
+  const db  = document.getElementById("cfg-db").value.trim();
+  const gr  = document.getElementById("cfg-gr").value.trim();
+  const msg = document.getElementById("connect-msg");
+
+  msg.className = "";
+  msg.textContent = "Connecting…";
+
+  try {
+    const resp = await fetch("/api/connect", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ endpoint: ep, key, database: db, graph: gr }),
+    });
+    const data = await resp.json();
+    if (data.error) {
+      msg.className = "err";
+      msg.textContent = data.error;
+    } else {
+      msg.className = "ok";
+      msg.textContent = data.message || "Connected!";
+      document.getElementById("status-dot").className = "status-dot ok";
+      document.getElementById("hdr-crumb").textContent = `${db} / ${gr}`;
+      setTimeout(closeSettings, 800);
+      // Reload schema for new connection
+      schemaData = { vertex_labels: [], edge_labels: [] };
+      document.getElementById("preset-loading").style.display = "";
+      document.getElementById("preset-row").innerHTML = '<span class="preset-loading" id="preset-loading">Loading schema…</span>';
+      loadSchema();
+    }
+  } catch (err) {
+    msg.className = "err";
+    msg.textContent = "Request failed: " + err.message;
+  }
+}
+
+// ── UI state helpers ───────────────────────────────────────────────────────
+let _loadingTimer = null;
+function showLoading(txt) {
+  clearTimeout(_loadingTimer);
+  document.getElementById("loading-txt").textContent = txt || "Loading…";
+  document.getElementById("loading").classList.add("on");
+  // Safety net: always clear after 30s so the overlay can never get stuck
+  _loadingTimer = setTimeout(hideLoading, 30000);
+}
+function hideLoading() {
+  clearTimeout(_loadingTimer);
+  document.getElementById("loading").classList.remove("on");
+}
+function showErr(msg) {
+  const el = document.getElementById("banner");
+  el.textContent = msg;
+  el.className = "err";
+}
+function showWarn(msg) {
+  const el = document.getElementById("banner");
+  el.textContent = msg;
+  el.className = "warn";
+}
+function hideBanner() {
+  document.getElementById("banner").className = "";
+  document.getElementById("banner").textContent = "";
+}
+function updateStats(nodes, edges, rows) {
+  let t = `${nodes} nodes · ${edges} edges`;
+  if (rows != null) t = `${rows} rows`;
+  document.getElementById("stats-label").textContent = t;
+}
+function esc(s) {
+  return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+}
+
+// Convert an HTML string into a styled DOM element for vis.js tooltips.
+// vis.js 9.x escapes plain strings — passing a DOM element bypasses that.
+function makeTip(html) {
+  if (!html) return undefined;
+  const div = document.createElement("div");
+  div.style.cssText = [
+    "background:#1e2130", "color:#e1e4ed", "border:1px solid #2d3148",
+    "border-radius:6px", "padding:8px 12px", "font-size:.75rem",
+    "line-height:1.6", "max-width:320px", "font-family:Inter,sans-serif",
+    "pointer-events:none",
+  ].join(";");
+  div.innerHTML = html;
+  return div;
+}
+
+// ── Init ───────────────────────────────────────────────────────────────────
+window.addEventListener("DOMContentLoaded", () => {
+  initNetwork();
+  {% if connected %}
+  loadSchema();
+  {% else %}
+  document.getElementById("preset-loading").textContent = "Not connected — click ⚙ Connection";
+  {% endif %}
+});
+</script>
+</body>
+</html>

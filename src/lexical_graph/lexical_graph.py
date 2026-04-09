@@ -1165,6 +1165,7 @@ def main():
 
     gremlin.close()
     print("\nDone! Lexical Graph stored in Cosmos DB (indigokg / knowledgegraph).")
+    print("Query with Gremlin: g.V().hasLabel('DomainEntity').limit(50)")
     print("Query with Gremlin: g.V().hasLabel('Document').out('MENTIONS').out('RELATES_TO').valueMap(true)")
 
 
