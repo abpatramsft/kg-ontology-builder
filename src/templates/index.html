@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>KG Inference Agent — IndiGo Airlines</title>
+<script src="https://unpkg.com/cytoscape@3.29.2/dist/cytoscape.min.js"></script>
 <style>
 /* ── Reset & Base ──────────────────────────────────────────── */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
@@ -40,26 +41,56 @@ body {
   background: var(--bg);
   color: var(--text);
   line-height: 1.6;
-  min-height: 100vh;
+  height: 100vh;
+  overflow: hidden;
 }
 
-/* ── Layout ────────────────────────────────────────────────── */
-.app {
-  max-width: 980px;
+/* ── App Shell — full-height two-column grid ───────────────── */
+.app-shell {
+  max-width: 1700px;
   margin: 0 auto;
-  padding: 32px 24px 64px;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
 }
 
-header { text-align: center; margin-bottom: 36px; }
+.app-header {
+  padding: 18px 24px 14px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  text-align: center;
+}
 
-header h1 {
-  font-size: 1.5rem;
+.app-body {
+  display: grid;
+  grid-template-columns: 500px 1fr;
+  flex: 1;
+  overflow: hidden;
+}
+
+.left-panel {
+  overflow-y: auto;
+  padding: 20px 20px 40px;
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+}
+
+.right-panel {
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── Header ────────────────────────────────────────────────── */
+.app-header h1 {
+  font-size: 1.4rem;
   font-weight: 700;
   letter-spacing: -.02em;
-  margin-bottom: 6px;
+  margin-bottom: 4px;
 }
-header h1 span { color: var(--accent); }
-header p { color: var(--text-dim); font-size: .82rem; }
+.app-header h1 span { color: var(--accent); }
+.app-header p { color: var(--text-dim); font-size: .78rem; }
 
 /* ── Input Area ────────────────────────────────────────────── */
 .input-area { display: flex; gap: 10px; margin-bottom: 12px; align-items: flex-start; }
@@ -101,7 +132,7 @@ header p { color: var(--text-dim); font-size: .82rem; }
 .btn:disabled { opacity: .35; cursor: not-allowed; }
 
 /* ── Sample Questions ──────────────────────────────────────── */
-.samples { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 28px; }
+.samples { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 24px; }
 
 .samples button {
   background: var(--surface);
@@ -370,51 +401,231 @@ header p { color: var(--text-dim); font-size: .82rem; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--text-dim); }
+
+/* ═══════════════════════════════════════════════════════════
+   KG Panel (right column)
+   ═══════════════════════════════════════════════════════════ */
+.kg-panel {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.kg-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  background: var(--surface);
+}
+
+.kg-title {
+  font-size: .8rem;
+  font-weight: 600;
+  color: var(--text-dim);
+  letter-spacing: .03em;
+  text-transform: uppercase;
+}
+
+.kg-node-count {
+  font-size: .7rem;
+  color: var(--text-mute);
+  font-family: var(--mono);
+  margin-left: 6px;
+}
+
+.kg-spacer { flex: 1; }
+
+.kg-status {
+  font-size: .72rem;
+  color: var(--amber);
+  font-family: var(--mono);
+  min-width: 120px;
+  text-align: right;
+}
+
+.kg-btn {
+  background: var(--surface2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  color: var(--text-dim);
+  font-size: .72rem;
+  padding: 4px 10px;
+  cursor: pointer;
+  font-family: var(--font);
+  transition: all .15s;
+}
+.kg-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+.kg-canvas {
+  flex: 1;
+  background: var(--bg);
+  min-height: 0;   /* critical for flex child to shrink */
+}
+
+.kg-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100%;
+  color: var(--text-mute);
+  font-size: .82rem;
+  gap: 10px;
+}
+
+/* ── KG Legend ─────────────────────────────────────────────── */
+.kg-legend {
+  padding: 8px 16px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+  flex-shrink: 0;
+}
+
+.kg-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: .68rem;
+  color: var(--text-dim);
+}
+
+.kg-legend-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+/* ── Node Tooltip ──────────────────────────────────────────── */
+.kg-tooltip {
+  position: absolute;
+  pointer-events: none;
+  z-index: 9999;
+  background: var(--surface2);
+  border: 1px solid var(--border-lt);
+  border-radius: var(--radius-sm);
+  padding: 10px 14px;
+  font-size: .76rem;
+  color: var(--text);
+  max-width: 280px;
+  box-shadow: 0 8px 32px rgba(0,0,0,.55);
+  opacity: 0;
+  transition: opacity .15s;
+  line-height: 1.5;
+}
+.kg-tooltip.visible { opacity: 1; }
+.kg-tooltip .tt-label {
+  font-size: .65rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  margin-bottom: 4px;
+}
+.kg-tooltip .tt-name {
+  font-weight: 600;
+  font-size: .85rem;
+  margin-bottom: 4px;
+  word-break: break-word;
+}
+.kg-tooltip .tt-desc {
+  color: var(--text-dim);
+  font-size: .72rem;
+  word-break: break-word;
+}
+.kg-tooltip .tt-badge {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: .62rem;
+  font-weight: 600;
+  margin-right: 4px;
+}
+
+/* ── Responsive: stack below 900px ─────────────────────────── */
+@media (max-width: 900px) {
+  body { overflow: auto; height: auto; }
+  .app-shell { height: auto; }
+  .app-body { grid-template-columns: 1fr; }
+  .left-panel { border-right: none; border-bottom: 1px solid var(--border); }
+  .right-panel { height: 450px; }
+}
 </style>
 </head>
 <body>
 
-<div class="app">
+<div class="app-shell">
 
-  <header>
+  <div class="app-header">
     <h1><span>KG Inference Agent</span> — IndiGo Airlines</h1>
     <p>Unified ontology over Knowledge Graph &middot; Document Embeddings &middot; Structured DB</p>
-  </header>
-
-  <div class="input-area">
-    <textarea id="queryInput" placeholder="Ask a question about IndiGo Airlines data..."
-              autocomplete="off" rows="1"></textarea>
-    <button class="btn" id="askBtn" onclick="submitQuestion()">Ask Agent</button>
   </div>
 
-  <div class="samples">
-    <button onclick="fillSample(this)">Give me a full travel history for our passenger Aarav Sharma — every flight he took, where he flew, how much he spent, what class he booked, and who the pilots were on his flight</button>
-    <button onclick="fillSample(this)">Which aircraft had a bird strike recently, and what was the full operational fallout — the flight details, crew on board, maintenance triggered, and cost?</button>
-    <button onclick="fillSample(this)">A crew member raised a fatigue concern about being assigned consecutive red-eye flights. Which flights were those, what were the actual departure and arrival times, and was the rest gap between them compliant with the 12-hour DGCA minimum?</button>
-    <button onclick="fillSample(this)">What's causing our flight delays? Break down total delay minutes by airport, identify whether they're ATC, weather, or technical, and tell me which single flight had the worst delay this month and why</button>
-    <button onclick="fillSample(this)">What was the total maintenance cost for aircraft AC003 across all recorded events, and what training actions were triggered by its engine inspections?</button>
-  </div>
+  <div class="app-body">
 
-  <div class="timeline" id="timeline">
-    <div class="status-bar" id="statusBar">
-      <div class="dot"></div>
-      <span id="statusText">Initializing...</span>
-      <span class="elapsed" id="elapsed">0.0s</span>
+    <!-- ── Left: query + timeline ─────────────────────────── -->
+    <div class="left-panel">
+
+      <div class="input-area" style="margin-top:16px;">
+        <textarea id="queryInput" placeholder="Ask a question about IndiGo Airlines data..."
+                  autocomplete="off" rows="1"></textarea>
+        <button class="btn" id="askBtn" onclick="submitQuestion()">Ask Agent</button>
+      </div>
+
+      <div class="samples">
+        <button onclick="fillSample(this)">Give me a full travel history for our passenger Aarav Sharma — every flight he took, where he flew, how much he spent, what class he booked, and who the pilots were on his flight</button>
+        <button onclick="fillSample(this)">Which aircraft had a bird strike recently, and what was the full operational fallout — the flight details, crew on board, maintenance triggered, and cost?</button>
+        <button onclick="fillSample(this)">A crew member raised a fatigue concern about being assigned consecutive red-eye flights. Which flights were those, what were the actual departure and arrival times, and was the rest gap between them compliant with the 12-hour DGCA minimum?</button>
+        <button onclick="fillSample(this)">What's causing our flight delays? Break down total delay minutes by airport, identify whether they're ATC, weather, or technical, and tell me which single flight had the worst delay this month and why</button>
+        <button onclick="fillSample(this)">What was the total maintenance cost for aircraft AC003 across all recorded events, and what training actions were triggered by its engine inspections?</button>
+      </div>
+
+      <div class="timeline" id="timeline">
+        <div class="status-bar" id="statusBar">
+          <div class="dot"></div>
+          <span id="statusText">Initializing...</span>
+          <span class="elapsed" id="elapsed">0.0s</span>
+        </div>
+        <div id="steps"></div>
+      </div>
+
+      <div class="answer-card" id="answerCard">
+        <h3>&#x2714;&#xFE0F; Final Answer</h3>
+        <div class="answer-text" id="answerText"></div>
+        <div class="answer-meta">
+          <span><strong id="metaSteps">0</strong> tool calls</span>
+          <span><strong id="metaTime">0.0</strong>s elapsed</span>
+          <span><strong id="metaIter">0</strong> iterations</span>
+        </div>
+      </div>
+
     </div>
-    <div id="steps"></div>
-  </div>
 
-  <div class="answer-card" id="answerCard">
-    <h3>&#x2714;&#xFE0F; Final Answer</h3>
-    <div class="answer-text" id="answerText"></div>
-    <div class="answer-meta">
-      <span><strong id="metaSteps">0</strong> tool calls</span>
-      <span><strong id="metaTime">0.0</strong>s elapsed</span>
-      <span><strong id="metaIter">0</strong> iterations</span>
+    <!-- ── Right: Knowledge Graph panel ───────────────────── -->
+    <div class="right-panel">
+      <div class="kg-panel">
+        <div class="kg-toolbar">
+          <span class="kg-title">Knowledge Graph</span>
+          <span class="kg-node-count" id="kgNodeCount"></span>
+          <div class="kg-spacer"></div>
+          <span class="kg-status" id="kgStatus"></span>
+          <button class="kg-btn" id="kgResetBtn" onclick="clearHighlights()">Reset View</button>
+          <button class="kg-btn" id="kgFitBtn" onclick="if(cy) cy.fit(undefined, 30)">Fit All</button>
+        </div>
+        <div id="cy" class="kg-canvas">
+          <div class="kg-loading" id="kgLoading">Loading Knowledge Graph...</div>
+        </div>
+        <div class="kg-legend" id="kgLegend"></div>
+      </div>
     </div>
-  </div>
+    <div class="kg-tooltip" id="kgTooltip"></div>
 
-</div>
+  </div><!-- /.app-body -->
+</div><!-- /.app-shell -->
 
 <script>
 /* ══════════════════════════════════════════════════════════════
@@ -425,6 +636,10 @@ header p { color: var(--text-dim); font-size: .82rem; }
 const $ = s => document.querySelector(s);
 let startTime = 0, timerInterval = null, eventSource = null;
 let stepCount = 0;
+
+/* Graph state */
+let cy = null;
+let highlightedNodeIds = new Set();
 
 /* Iteration state: track current iteration card & its body */
 const iterations = {};          // { iterNum: { card, body, toolName, complete } }
@@ -610,6 +825,16 @@ function submitQuestion() {
     iter.complete = true;
   });
 
+  eventSource.addEventListener('graph_highlight', e => {
+    const d = JSON.parse(e.data);
+    applyHighlight(d);
+  });
+
+  eventSource.addEventListener('graph_traversal_path', e => {
+    const d = JSON.parse(e.data);
+    showTraversalPath(d.node_names);
+  });
+
   eventSource.addEventListener('parse_error', e => {
     const d = JSON.parse(e.data);
     const iter = getOrCreateIteration(d.iteration);
@@ -655,6 +880,8 @@ function resetUI() {
   Object.keys(iterations).forEach(k => delete iterations[k]);
   if (timerInterval) clearInterval(timerInterval);
   if (eventSource) { eventSource.close(); eventSource = null; }
+  clearHighlights();
+  setKgStatus('');
 }
 
 function updateTimer() {
@@ -697,6 +924,11 @@ function syntaxHighlight(json) {
     .replace(/: "([^"]*)"/g, ': <span style="color:var(--green)">"$1"</span>');
 }
 
+function setKgStatus(msg) {
+  const el = $('#kgStatus');
+  if (el) el.textContent = msg;
+}
+
 /* ── Auto-resize textarea ──────────────────────────────────── */
 function autoResize(el) {
   el.style.height = 'auto';
@@ -710,6 +942,495 @@ $('#queryInput').addEventListener('keydown', e => {
     submitQuestion();
   }
 });
+
+/* ══════════════════════════════════════════════════════════════
+   Knowledge Graph Visualization — Cytoscape.js
+   ══════════════════════════════════════════════════════════════ */
+
+const NODE_COLORS = {
+  DomainEntity: '#6c8cff',
+  Concept:      '#c084fc',
+  Document:     '#4ade80',
+  Subject:      '#22d3ee',
+  Object:       '#fbbf24',
+};
+
+const EDGE_COLORS = {
+  FK:              '#4a5070',
+  SEMANTIC:        '#4a5070',
+  HAS_CONCEPT:     '#7060c0',
+  RELATED_CONCEPT: '#5050a0',
+  MENTIONS:        '#3a6040',
+  RELATES_TO:      '#406060',
+  CORRESPONDS_TO:  '#6c8cff',
+};
+
+const VISIBLE_LABELS = new Set(['DomainEntity', 'Subject', 'Document']);
+const NODE_LABELS = [...VISIBLE_LABELS];
+
+async function initKnowledgeGraph() {
+  try {
+    const resp = await fetch('/api/graph');
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const data = await resp.json();
+    if (data.error) throw new Error(data.error);
+
+    const elements = buildCytoscapeElements(data);
+    const visibleNodes = elements.filter(e => e.data && !e.data.source && VISIBLE_LABELS.has(e.data.label)).length;
+    const visibleEdges = elements.filter(e => e.data && e.data.source).length;
+    renderCytoscape(elements, visibleNodes, visibleEdges);
+  } catch (err) {
+    console.error('KG load failed:', err);
+    const canvas = $('#cy');
+    canvas.innerHTML = `<div class="kg-loading" style="color:var(--red)">Graph unavailable: ${escapeHtml(err.message)}</div>`;
+  }
+}
+
+/* Edge line-style map for visual differentiation */
+const EDGE_LINE_STYLE = {
+  FK:              'solid',
+  SEMANTIC:        'dashed',
+  HAS_CONCEPT:     'dashed',
+  RELATED_CONCEPT: 'dashed',
+  MENTIONS:        'solid',
+  RELATES_TO:      'solid',
+  CORRESPONDS_TO:  'solid',
+};
+
+function buildCytoscapeElements(data) {
+  /* Pre-compute degree for each node to scale size */
+  const degreeMap = {};
+  (data.edges || []).forEach(e => {
+    const s = String(e.source), t = String(e.target);
+    degreeMap[s] = (degreeMap[s] || 0) + 1;
+    degreeMap[t] = (degreeMap[t] || 0) + 1;
+  });
+
+  const nodes = (data.nodes || []).filter(n => n.id && VISIBLE_LABELS.has(n.label || 'Unknown')).map(n => {
+    const deg = degreeMap[String(n.id)] || 0;
+    return {
+      data: {
+        id:          String(n.id),
+        label:       n.label || 'Unknown',
+        name:        n.name  || '',
+        description: n.description || '',
+        domain:      n.domain || '',
+        node_type:   n.node_type || '',
+        bgColor:     NODE_COLORS[n.label] || '#888888',
+        displayName: (n.name || '').substring(0, 26),
+        degree:      deg,
+      }
+    };
+  });
+
+  const nodeIds = new Set(nodes.map(n => n.data.id));
+
+  const edges = (data.edges || []).filter(e => {
+    return e.source && e.target && nodeIds.has(String(e.source)) && nodeIds.has(String(e.target));
+  }).map((e, i) => ({
+    data: {
+      id:        `e_${i}`,
+      source:    String(e.source),
+      target:    String(e.target),
+      type:      e.type || '',
+      edgeColor: EDGE_COLORS[e.type] || '#3a3f5c',
+      lineStyle: EDGE_LINE_STYLE[e.type] || 'solid',
+      edgeLabel: (e.type || '').replace(/_/g, ' '),
+    }
+  }));
+
+  return [...nodes, ...edges];
+}
+
+function renderCytoscape(elements, nodeCount, edgeCount) {
+  // Remove loading placeholder
+  const loadingEl = $('#kgLoading');
+  if (loadingEl) loadingEl.remove();
+
+  cy = cytoscape({
+    container: document.getElementById('cy'),
+    elements:  elements,
+
+    style: [
+      /* ── Base node ── */
+      {
+        selector: 'node',
+        style: {
+          'background-color':   'data(bgColor)',
+          'background-opacity': 0.85,
+          'label':              'data(displayName)',
+          'color':              '#d0d4e0',
+          'font-size':          '9px',
+          'font-family':        'Inter, sans-serif',
+          'font-weight':        500,
+          'text-valign':        'bottom',
+          'text-halign':        'center',
+          'text-margin-y':      5,
+          'text-max-width':     '90px',
+          'text-wrap':          'ellipsis',
+          /* Degree-mapped sizing: min 22, max 48 */
+          'width':              'mapData(degree, 0, 20, 22, 48)',
+          'height':             'mapData(degree, 0, 20, 22, 48)',
+          'border-width':       2,
+          'border-color':       'data(bgColor)',
+          'border-opacity':     0.5,
+          'text-outline-color': '#0f1117',
+          'text-outline-width': 2,
+          /* Subtle outer glow via overlay */
+          'overlay-color':      'data(bgColor)',
+          'overlay-padding':    3,
+          'overlay-opacity':    0,
+          'transition-property':       'width, height, border-width, border-color, opacity, overlay-opacity',
+          'transition-duration':       '0.2s',
+          'transition-timing-function': 'ease-out',
+        }
+      },
+      /* Hovered node — subtle grow & glow */
+      {
+        selector: 'node:active, node.hover',
+        style: {
+          'overlay-opacity':  0.12,
+          'border-opacity':   1,
+          'border-width':     3,
+          'z-index':          900,
+        }
+      },
+      /* ── Base edge ── */
+      {
+        selector: 'edge',
+        style: {
+          'line-color':         'data(edgeColor)',
+          'line-style':         'data(lineStyle)',
+          'target-arrow-color': 'data(edgeColor)',
+          'target-arrow-shape': 'triangle',
+          'arrow-scale':        0.6,
+          'width':              1.2,
+          'curve-style':        'bezier',
+          'opacity':            0.35,
+          'transition-property': 'opacity, width, line-color',
+          'transition-duration': '0.2s',
+        }
+      },
+      /* Edge label shown on hover via class */
+      {
+        selector: 'edge.show-label',
+        style: {
+          'label':              'data(edgeLabel)',
+          'font-size':          '7px',
+          'font-family':        'Inter, sans-serif',
+          'color':              '#8b90a5',
+          'text-rotation':      'autorotate',
+          'text-outline-color': '#0f1117',
+          'text-outline-width': 1.5,
+          'text-margin-y':      -8,
+          'opacity':            0.75,
+          'width':              2,
+        }
+      },
+      /* ── Highlighted node — white ring, larger ── */
+      {
+        selector: 'node.highlighted',
+        style: {
+          'border-color':       '#ffffff',
+          'border-width':       3,
+          'border-opacity':     1,
+          'width':              34,
+          'height':             34,
+          'z-index':            999,
+          'font-size':          '10px',
+          'font-weight':        'bold',
+          'text-outline-width': 2.5,
+          'color':              '#ffffff',
+          'overlay-opacity':    0.15,
+          'overlay-color':      '#ffffff',
+        }
+      },
+      /* Highlighted edge (neighbor of highlighted node) */
+      {
+        selector: 'edge.highlighted-edge',
+        style: {
+          'opacity':            0.85,
+          'width':              2.5,
+          'z-index':            998,
+        }
+      },
+      /* ── Dimmed — fade out non-highlighted ── */
+      {
+        selector: 'node.dimmed',
+        style: { 'opacity': 0.08 }
+      },
+      {
+        selector: 'edge.dimmed',
+        style: { 'opacity': 0.03 }
+      },
+      /* ── Class-level highlight ── */
+      {
+        selector: 'node.class-highlighted',
+        style: {
+          'border-color': '#ffffff',
+          'border-width': 2,
+          'border-opacity': 1,
+          'opacity':      1,
+        }
+      },
+      /* ── Traversal path — amber glow ── */
+      {
+        selector: 'node.traversal',
+        style: {
+          'background-color': '#fbbf24',
+          'border-color':     '#fbbf24',
+          'border-width':     3,
+          'border-opacity':   1,
+          'width':            30,
+          'height':           30,
+          'color':            '#ffffff',
+          'font-size':        '9px',
+          'font-weight':      'bold',
+          'overlay-opacity':  0.18,
+          'overlay-color':    '#fbbf24',
+        }
+      },
+      {
+        selector: 'edge.traversal-edge',
+        style: {
+          'line-color':         '#fbbf24',
+          'target-arrow-color': '#fbbf24',
+          'opacity':            0.85,
+          'width':              2.5,
+          'line-style':         'solid',
+        }
+      },
+      /* ── Neighbor highlight on click ── */
+      {
+        selector: 'node.neighbor',
+        style: {
+          'opacity':        1,
+          'border-color':   '#ffffff',
+          'border-width':   2,
+          'border-opacity': 0.6,
+        }
+      },
+    ],
+
+    layout: {
+      name:            'cose',
+      animate:         true,
+      animationDuration: 1200,
+      randomize:       true,
+      nodeRepulsion:   () => 800000,
+      idealEdgeLength: () => 350,
+      edgeElasticity:  () => 0.005,
+      gravity:         0.008,
+      gravityRange:    1.5,
+      nestingFactor:   1.2,
+      numIter:         3000,
+      coolingFactor:   0.97,
+      minTemp:         1.0,
+      initialTemp:     2000,
+      nodeDimensionsIncludeLabels: true,
+      padding:         80,
+      nodeOverlap:     80,
+      componentSpacing: 250,
+      fit:             true,
+    },
+
+    minZoom: 0.03,
+    maxZoom: 8,
+    wheelSensitivity: 0.3,
+    pixelRatio: 'auto',
+  });
+
+  /* ── Rich tooltip on node hover ───────────────────────── */
+  const tooltip = $('#kgTooltip');
+
+  cy.on('mouseover', 'node', e => {
+    const node = e.target;
+    const d = node.data();
+    node.addClass('hover');
+
+    // Show connected edges' labels
+    node.connectedEdges().addClass('show-label');
+
+    // Build tooltip HTML
+    const color = d.bgColor || '#888';
+    tooltip.innerHTML = `
+      <div class="tt-label" style="color:${color}">
+        <span class="tt-badge" style="background:${color}22;color:${color}">${escapeHtml(d.label)}</span>
+        ${d.domain ? escapeHtml(d.domain) : ''}
+      </div>
+      <div class="tt-name">${escapeHtml(d.name)}</div>
+      ${d.description ? `<div class="tt-desc">${escapeHtml(d.description).substring(0, 160)}${d.description.length > 160 ? '...' : ''}</div>` : ''}
+    `;
+    tooltip.classList.add('visible');
+    setKgStatus(`${d.label}: ${d.name}`);
+  });
+
+  cy.on('mousemove', 'node', e => {
+    const { x, y } = e.renderedPosition || e.position;
+    const rect = cy.container().getBoundingClientRect();
+    tooltip.style.left = (rect.left + x + 16) + 'px';
+    tooltip.style.top  = (rect.top  + y - 10) + 'px';
+  });
+
+  cy.on('mouseout', 'node', e => {
+    e.target.removeClass('hover');
+    e.target.connectedEdges().removeClass('show-label');
+    tooltip.classList.remove('visible');
+    setKgStatus('');
+  });
+
+  /* ── Click node → highlight neighborhood ─────────────── */
+  cy.on('tap', 'node', e => {
+    const node = e.target;
+    const neighborhood = node.closedNeighborhood();
+
+    // If already highlighted, clear
+    if (node.hasClass('highlighted')) {
+      clearHighlights();
+      return;
+    }
+
+    clearHighlights();
+    cy.elements().addClass('dimmed');
+    neighborhood.removeClass('dimmed');
+    node.addClass('highlighted');
+    neighborhood.nodes().not(node).addClass('neighbor');
+    neighborhood.edges().addClass('highlighted-edge');
+
+    setKgStatus(`${node.data('label')}: ${node.data('name')} — ${neighborhood.nodes().length - 1} connections`);
+  });
+
+  /* Click background → clear highlights */
+  cy.on('tap', e => {
+    if (e.target === cy) clearHighlights();
+  });
+
+  /* ── Hover edge → show label ─────────────────────────── */
+  cy.on('mouseover', 'edge', e => e.target.addClass('show-label'));
+  cy.on('mouseout',  'edge', e => e.target.removeClass('show-label'));
+
+  // Update node count badge
+  const countEl = $('#kgNodeCount');
+  if (countEl) countEl.textContent = `${nodeCount} nodes · ${edgeCount} edges`;
+
+  buildLegend();
+}
+
+/* ── Graph highlight on agent step ────────────────────────── */
+function applyHighlight(h) {
+  if (!cy) return;
+
+  const { highlight_type, node_names, node_labels } = h;
+  clearHighlights();
+
+  if (highlight_type === 'named_nodes' && node_names && node_names.length > 0) {
+    // Build selector matching any of the given names
+    const sel = node_names
+      .filter(Boolean)
+      .map(name => `node[name = "${name.replace(/"/g, '\\"')}"]`)
+      .join(', ');
+    const targets = cy.$(sel);
+
+    if (targets.length > 0) {
+      cy.elements().addClass('dimmed');
+      targets.removeClass('dimmed').addClass('highlighted');
+      targets.connectedEdges().removeClass('dimmed');
+      highlightedNodeIds = new Set(targets.map(n => n.id()));
+
+      cy.animate({
+        fit: { eles: targets.add(targets.connectedEdges()), padding: 80 },
+        duration: 500,
+        easing: 'ease-in-out-quad',
+      });
+    }
+    setKgStatus(`Querying: ${node_names.filter(Boolean).join(', ')}`);
+
+  } else if (highlight_type === 'label_class' && node_labels && node_labels.length > 0) {
+    const sel = node_labels.map(lbl => `node[label = "${lbl}"]`).join(', ');
+    const targets = cy.$(sel);
+    cy.elements().addClass('dimmed');
+    targets.removeClass('dimmed').addClass('class-highlighted');
+    setKgStatus(`Scanning: ${node_labels.join(', ')} nodes`);
+
+  } else if (highlight_type === 'schema_scan') {
+    cy.nodes().addClass('class-highlighted');
+    setKgStatus('Schema scan');
+    setTimeout(() => {
+      cy.nodes().removeClass('class-highlighted');
+      setKgStatus('');
+    }, 1400);
+
+  } else if (highlight_type === 'path_query' && node_names && node_names.length > 0) {
+    const sel = node_names
+      .filter(Boolean)
+      .map(name => `node[name = "${name.replace(/"/g, '\\"')}"]`)
+      .join(', ');
+    const targets = cy.$(sel);
+    cy.elements().addClass('dimmed');
+    targets.removeClass('dimmed').addClass('highlighted');
+    targets.connectedEdges().removeClass('dimmed');
+    setKgStatus(`Path: ${node_names.filter(Boolean).join(' → ')}`);
+
+  } else if (highlight_type === 'custom_query') {
+    setKgStatus('Custom Cypher query');
+  }
+}
+
+function clearHighlights() {
+  if (!cy) return;
+  cy.elements().removeClass('highlighted dimmed class-highlighted traversal traversal-edge highlighted-edge neighbor show-label hover');
+  highlightedNodeIds = new Set();
+  const tooltip = $('#kgTooltip');
+  if (tooltip) tooltip.classList.remove('visible');
+}
+
+/* ── Final traversal path overlay ─────────────────────────── */
+function showTraversalPath(nodeNames) {
+  if (!cy || !nodeNames || nodeNames.length === 0) return;
+  clearHighlights();
+
+  const sel = nodeNames
+    .filter(Boolean)
+    .map(name => `node[name = "${name.replace(/"/g, '\\"')}"]`)
+    .join(', ');
+  const touched = cy.$(sel);
+
+  cy.elements().addClass('dimmed');
+  touched.removeClass('dimmed').addClass('traversal');
+
+  // Highlight edges that connect two traversal nodes
+  touched.connectedEdges().filter(e =>
+    touched.has(e.source()) && touched.has(e.target())
+  ).removeClass('dimmed').addClass('traversal-edge');
+
+  if (touched.length > 0) {
+    cy.animate({ fit: { eles: touched, padding: 60 }, duration: 700 });
+  }
+
+  setKgStatus(`Traversal path: ${nodeNames.filter(Boolean).length} nodes`);
+}
+
+/* ── Legend ────────────────────────────────────────────────── */
+function buildLegend() {
+  const legend = $('#kgLegend');
+  if (!legend) return;
+  legend.innerHTML = '';
+  NODE_LABELS.forEach(label => {
+    const item = document.createElement('div');
+    item.className = 'kg-legend-item';
+    const dot = document.createElement('div');
+    dot.className = 'kg-legend-dot';
+    dot.style.background = NODE_COLORS[label];
+    const text = document.createElement('span');
+    text.textContent = label;
+    item.appendChild(dot);
+    item.appendChild(text);
+    legend.appendChild(item);
+  });
+}
+
+/* ── Init on page load ─────────────────────────────────────── */
+document.addEventListener('DOMContentLoaded', initKnowledgeGraph);
 </script>
 
 </body>

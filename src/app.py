@@ -13,6 +13,7 @@ import os
 import sys
 import time
 import queue
+import re
 import threading
 
 from flask import Flask, render_template, request, Response, jsonify, stream_with_context
@@ -36,6 +37,88 @@ from utils.llm import get_llm_client, get_embedding_client, embed_texts
 from utils.neo4j_helpers import get_neo4j_driver, run_cypher
 
 import lancedb
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  Graph highlight helper — maps tool calls to node highlight payloads
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _build_graph_highlight(tool_name: str, action_input: dict):
+    """Return a graph_highlight event payload, or None if nothing to highlight."""
+    if not isinstance(action_input, dict):
+        return None
+
+    if tool_name == "graph_ontology_tool":
+        action = action_input.get("action", "")
+
+        if action in ("list_node_labels", "list_relationship_types"):
+            return {"tool": tool_name, "action": action,
+                    "highlight_type": "schema_scan",
+                    "node_names": [], "node_labels": [], "edge_types": []}
+
+        elif action == "list_domain_entities":
+            return {"tool": tool_name, "action": action,
+                    "highlight_type": "label_class",
+                    "node_names": [], "node_labels": ["DomainEntity"], "edge_types": []}
+
+        elif action == "list_subjects":
+            return {"tool": tool_name, "action": action,
+                    "highlight_type": "label_class",
+                    "node_names": [], "node_labels": ["Subject"], "edge_types": []}
+
+        elif action == "list_documents":
+            return {"tool": tool_name, "action": action,
+                    "highlight_type": "label_class",
+                    "node_names": [], "node_labels": ["Document"], "edge_types": []}
+
+        elif action in ("get_domain_entity_detail", "get_subject_context",
+                        "get_correspondences"):
+            name = action_input.get("name", "")
+            return {"tool": tool_name, "action": action,
+                    "highlight_type": "named_nodes",
+                    "node_names": [name] if name else [], "node_labels": [], "edge_types": []}
+
+        elif action == "find_path":
+            from_name = action_input.get("from_name", "")
+            to_name   = action_input.get("to_name", "")
+            names = [n for n in [from_name, to_name] if n]
+            return {"tool": tool_name, "action": action,
+                    "highlight_type": "path_query",
+                    "node_names": names, "node_labels": [], "edge_types": []}
+
+        elif action == "query_graph":
+            return {"tool": tool_name, "action": action,
+                    "highlight_type": "custom_query",
+                    "node_names": [], "node_labels": [], "edge_types": [],
+                    "cypher": action_input.get("cypher", "")}
+
+    elif tool_name == "vector_search_tool":
+        action   = action_input.get("action", "")
+        doc_name = action_input.get("doc_name", "")
+        if doc_name:
+            return {"tool": tool_name, "action": action,
+                    "highlight_type": "named_nodes",
+                    "node_names": [doc_name], "node_labels": ["Document"], "edge_types": []}
+        else:
+            return {"tool": tool_name, "action": action,
+                    "highlight_type": "label_class",
+                    "node_names": [], "node_labels": ["Document"], "edge_types": []}
+
+    elif tool_name == "sql_query_tool":
+        action = action_input.get("action", "")
+        table  = action_input.get("table", "")
+        sql    = action_input.get("sql", "")
+        node_names = []
+        if table:
+            node_names = [table]
+        elif sql:
+            found = re.findall(r'(?:FROM|JOIN)\s+\[?(\w+)\]?', sql, re.IGNORECASE)
+            node_names = list(dict.fromkeys(found))
+        return {"tool": tool_name, "action": action,
+                "highlight_type": "named_nodes",
+                "node_names": node_names, "node_labels": ["DomainEntity"], "edge_types": []}
+
+    return None
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -70,6 +153,18 @@ class StreamingInferenceAgent(InferenceAgent):
             parsed = self._parse_response(response_text)
 
             if parsed["type"] == "final_answer":
+                # Emit traversal path before final answer
+                touched = []
+                for step in self.trace:
+                    ai = step.get("action", {})
+                    for k in ("name", "from_name", "to_name", "table", "doc_name"):
+                        v = ai.get(k)
+                        if v and isinstance(v, str) and v not in touched:
+                            touched.append(v)
+                self._emit("graph_traversal_path", {
+                    "node_names": touched,
+                    "total_steps": len(self.trace),
+                })
                 self._emit("final_answer", {
                     "answer": parsed["answer"],
                     "iterations": iteration,
@@ -112,6 +207,11 @@ class StreamingInferenceAgent(InferenceAgent):
                     "observation": observation,
                 })
 
+                # Emit graph highlight for this tool call
+                highlight = _build_graph_highlight(tool_name, action_input)
+                if highlight is not None:
+                    self._emit("graph_highlight", highlight)
+
                 self.trace.append({
                     "iteration": iteration,
                     "thought": thought,
@@ -152,6 +252,17 @@ class StreamingInferenceAgent(InferenceAgent):
 
         # Max iterations — force answer
         answer = self._force_final_answer(question)
+        touched = []
+        for step in self.trace:
+            ai = step.get("action", {})
+            for k in ("name", "from_name", "to_name", "table", "doc_name"):
+                v = ai.get(k)
+                if v and isinstance(v, str) and v not in touched:
+                    touched.append(v)
+        self._emit("graph_traversal_path", {
+            "node_names": touched,
+            "total_steps": len(self.trace),
+        })
         self._emit("final_answer", {
             "answer": answer,
             "iterations": self.MAX_ITERATIONS,
@@ -261,6 +372,31 @@ def sample_trace():
         with open(path, "r", encoding="utf-8") as f:
             return jsonify(json.load(f))
     return jsonify([])
+
+
+@app.route("/api/graph")
+def get_graph():
+    """Return the full KG as {nodes, edges} for the visualization panel."""
+    try:
+        nodes = run_cypher(_driver, """
+            MATCH (n)
+            WHERE n:DomainEntity OR n:Concept OR n:Document OR n:Subject OR n:Object
+            RETURN n.name AS id, labels(n)[0] AS label, n.name AS name,
+                   n.description AS description, n.domain AS domain,
+                   n.type AS node_type
+            ORDER BY label, name
+        """)
+        edges = run_cypher(_driver, """
+            MATCH (a)-[r]->(b)
+            WHERE type(r) IN ['FK','SEMANTIC','HAS_CONCEPT','RELATED_CONCEPT',
+                              'MENTIONS','RELATES_TO','CORRESPONDS_TO']
+              AND (a:DomainEntity OR a:Concept OR a:Document OR a:Subject OR a:Object)
+              AND (b:DomainEntity OR b:Concept OR b:Document OR b:Subject OR b:Object)
+            RETURN a.name AS source, b.name AS target, type(r) AS type
+        """)
+        return jsonify({"nodes": nodes, "edges": edges})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
